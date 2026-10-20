@@ -9,3 +9,4 @@ __pycache__/
 /preview*.png
 /index.html
 /check.cjs
+/static/fonts/*.woff2

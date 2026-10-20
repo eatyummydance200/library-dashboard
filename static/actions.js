@@ -41,8 +41,13 @@ async function loadStatus(){
   const data=await api('/status?at='+encodeURIComponent(at+'+09:00'));
   const p=snapshot(preview()||new Date());
   $('#shift-date').textContent=`${p.month}월 ${p.dayNumber}일 ${['월','화','수','목','금','토','일'][p.day]}요일`;
+  $('#status-mode').textContent=manualTime?'선택 시각 조회':'실시간';
   const when=value=>value?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(value)):'예정 없음';
-  $('#handoff').innerHTML=[['이전 근무',data.previous,data.previous_at],['현재 근무',data.current,data.at],['다음 근무',data.next,data.next_at]].map(([label,entries,time],i)=>`<article class="shift ${i===1?'current':''}"><div class="shift-head"><span>${i===1?'<i class="dot"></i>':icon('clock')}${label}</span><span>${when(time)}</span></div><div class="shift-people">${entries.length?entries.map(entry=>{const s=staff.find(s=>s.dbid===entry.staff_id);return `<span class="person-tag">${esc(s?.name||'근무자')}<span class="role ${entry.role==='desk'?'desk':''}">${entry.role==='desk'?'데스크':'일반'}</span></span>`;}).join(''):'<span class="empty-person">예정된 근무가 없어요</span>'}</div></article>`).join('');
+  const group=(entries,desk)=>{
+    const assigned=entries.filter(entry=>(entry.role==='desk')===desk);
+    return `<div class="duty-group ${desk?'desk-duty':'standby-duty'}" data-duty="${desk?'desk':'standby'}"><h3>${desk?'데스크 담당':'대기 근무'}</h3><div class="duty-people">${assigned.length?assigned.map(entry=>`<span class="duty-person">${esc(staff.find(s=>s.dbid===entry.staff_id)?.name||'근무자')}</span>`).join(''):'<span class="unassigned">배정 없음</span>'}</div></div>`;
+  };
+  $('#handoff').innerHTML=[['현재 근무',data.current,data.at],['이전 근무',data.previous,data.previous_at],['다음 근무',data.next,data.next_at]].map(([label,entries,time],i)=>`<article class="shift ${i===0?'current':''}" aria-label="${label}"><div class="shift-head"><h3>${i===0?'<i class="dot"></i>':icon(i===1?'clock':'arrow')}${label}</h3><time>${when(time)}</time></div>${group(entries,true)}${group(entries,false)}</article>`).join('');
 }
 async function loadIssues(){issues=await api('/issues');renderIssues();}
 function renderIssues(){
@@ -125,7 +130,13 @@ async function initialize(){
   await loadWeek();await Promise.all([loadIssues(),loadStatus()]);renderIcons();applyPermissions();
 }
 initialize().catch(error=>{$('#load-error').textContent='데이터를 불러오지 못했습니다. '+error.message+' 새로고침해주세요.';$('#load-error').hidden=false;});
-setInterval(async()=>{if(manualTime||!user||document.hidden)return;try{$('#preview-time').value=localInput();await loadWeek();await Promise.all([loadStatus(),loadIssues()]);}catch(error){showError(error);}},60000);
+async function refreshCurrentView(){
+  if(!user||document.hidden)return;
+  if(manualTime){renderSchedule();return;}
+  try{$('#preview-time').value=localInput();await loadWeek();await Promise.all([loadStatus(),loadIssues()]);}catch(error){showError(error);}
+}
+setInterval(refreshCurrentView,60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCurrentView();});
 
 $('.top-actions .avatar').onclick=()=>$('#account-dialog').showModal();
 $('#account-password').onclick=()=>{$('#account-dialog').close();$('#password-button').click();};

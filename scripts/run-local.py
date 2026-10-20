@@ -1,8 +1,10 @@
 """Local browser QA only; production runs from Server Desk."""
 import os
+import subprocess
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
+subprocess.run([str(root / '.venv/bin/python3'), str(root / 'scripts/fetch-font.py')], check=True)
 settings = dict(line.split('=', 1) for line in (root / '.runtime.env').read_text().splitlines()
                 if line and not line.startswith('#'))
 os.environ.update(settings)

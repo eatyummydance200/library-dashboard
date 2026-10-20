@@ -57,6 +57,10 @@ async function main() {
   };
   await call('Runtime.enable');
   await call('Page.enable');
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(p=>[p.type,p.value]));
+  const wednesday=new Date(Date.UTC(+parts.year,+parts.month-1,+parts.day,5,45));
+  wednesday.setUTCDate(wednesday.getUTCDate()-(wednesday.getUTCDay()+6)%7+2);
+  await call('Page.addScriptToEvaluateOnNewDocument',{source:`{const NativeDate=Date;window.__qaNativeDate=NativeDate;window.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};}`});
   await call('Emulation.setDeviceMetricsOverride',{width:1536,height:1400,deviceScaleFactor:1,mobile:false});
   await call('Page.navigate', {url:baseURL+'/login'});
   async function waitFor(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error('Timed out: '+expression);}
@@ -64,7 +68,30 @@ async function main() {
   await evaluate(`document.querySelector('input[name=username]').value=${JSON.stringify(settings.ADMIN_USER)};document.querySelector('input[name=password]').value=${JSON.stringify(settings.ADMIN_PASSWORD)};document.querySelector('form').requestSubmit()`);
   await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".timetable") && typeof csrfToken !== "undefined" && !!csrfToken');
   await waitFor('document.querySelector("#handoff").children.length===3');
-  assert.equal(await evaluate('document.querySelectorAll(".timetable tbody tr").length'),12);
+  await evaluate('document.fonts.ready');
+  assert.equal(await evaluate('document.querySelectorAll(".timetable tbody tr").length'),24);
+  assert.equal(await evaluate('document.querySelector("#metrics")'),null);
+  assert.equal(await evaluate('document.querySelectorAll(".metric").length'),0);
+  assert.equal(await evaluate('document.querySelector(".shift.current h3").textContent.includes("현재 근무")'),true);
+  assert.equal(await evaluate('document.querySelectorAll(".duty-group[data-duty=desk]").length'),3);
+  assert.equal(await evaluate('document.querySelectorAll(".duty-group[data-duty=standby]").length'),3);
+  assert.equal(await evaluate('document.querySelector(".current-row").dataset.start'),'870');
+  assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),1);
+  assert.equal(await evaluate('document.fonts.check("16px Pretendard")'),true);
+  assert.equal(await evaluate('getComputedStyle(document.body).fontFamily.includes("Pretendard")'),true);
+  assert.equal(await evaluate('parseFloat(getComputedStyle(document.querySelector(".slot-start")).fontSize)>=16'),true);
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".time")).position'),'sticky');
+  for(const [hour,minute,expected] of [[8,59,null],[9,0,'540'],[9,29,'540'],[9,30,'570'],[20,59,'1230'],[21,0,null]]){
+    const stamp=new Date(wednesday);stamp.setUTCHours(hour-9,minute,0,0);
+    await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${stamp.getTime()}]));}static now(){return ${stamp.getTime()};}};renderSchedule()`);
+    assert.equal(await evaluate('document.querySelector(".current-row")?.dataset.start??null'),expected);
+  }
+  const saturday=wednesday.getTime()+3*86400000;
+  await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${saturday}]));}};renderSchedule()`);
+  assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),0);
+  await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};renderSchedule()`);
+  assert.deepEqual(await evaluate('[...document.querySelectorAll(".timetable tbody tr")].slice(0,3).map(r=>Number(r.dataset.start))'),[540,570,600]);
+  assert.equal(await evaluate(`(()=>{const shift=rawShifts.find(s=>s.start%60===30);if(!shift)return true;const day=(new Date(shift.day+'T00:00:00Z').getUTCDay()+6)%7;return !document.querySelector('tr[data-start="'+(shift.start-30)+'"]').querySelectorAll('td')[day].querySelector('[data-shift="'+shift.id+'"]')&&!!document.querySelector('tr[data-start="'+shift.start+'"]').querySelectorAll('td')[day].querySelector('[data-shift="'+shift.id+'"]');})()`),true);
   assert.equal(await evaluate('document.querySelectorAll(".staff-row").length>=7'),true);
   assert.equal(await evaluate('document.querySelector(".brand img").naturalWidth>0'),true);
   assert.equal(await evaluate('document.querySelector("#load-error").hidden'),true);
@@ -75,6 +102,13 @@ async function main() {
   await evaluate('document.querySelector("#staff-filter").value="0";document.querySelector("#staff-filter").dispatchEvent(new Event("change"))');
   assert.equal(await evaluate('document.querySelectorAll(".worker.dimmed").length>0'),true);
   await evaluate('selectedStaff="";renderSchedule()');
+  const week=await evaluate('document.querySelector(".table-scroll").dataset.week');
+  await evaluate('document.querySelector("#next-week").click()');
+  await waitFor(`document.querySelector('.table-scroll').dataset.week!==${JSON.stringify(week)}`);
+  assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),0);
+  await evaluate('document.querySelector("#this-week").click()');
+  await waitFor(`document.querySelector('.table-scroll').dataset.week===${JSON.stringify(week)}`);
+  await evaluate('document.querySelector("#show-now").click()');
   if(local){
     await evaluate('setView("people");document.querySelector("[data-edit]").click()');
     await evaluate('document.querySelector("#contact-phone").value="010-1234-5678";document.querySelector("#contact-form").requestSubmit()');
@@ -94,14 +128,23 @@ async function main() {
   }
   await evaluate('setView("dashboard")');
   await waitFor('document.querySelector("#handoff").children.length===3');
+  await evaluate('document.querySelector("#show-now").click()');
   for(const width of [390,700,768,1024,1280,1536]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
   }
+  await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+  await evaluate('document.querySelector("#show-now").click()');
+  assert.equal(await evaluate('document.querySelector(".table-scroll").scrollTop>0'),true);
+  assert.equal(await evaluate('(()=>{const line=document.querySelector(".now-line").getBoundingClientRect(),view=document.querySelector(".table-scroll").getBoundingClientRect();return line.top>view.top+65&&line.top<view.bottom;})()'),true);
   const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
-  writeFileSync(join(root,local?'preview-service.png':'preview-live.png'),Buffer.from(shot.data,'base64'));
+  writeFileSync(join(root,local?'preview-readable.png':'preview-live.png'),Buffer.from(shot.data,'base64'));
+  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await evaluate('document.querySelector("#show-now").click()');
+  const mobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  writeFileSync(join(root,'preview-readable-mobile.png'),Buffer.from(mobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: real login, all tabs, source data, filtering, persisted edits, issue escaping, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 24 half-hour rows, boundary placement, current-time marker and week navigation, role groups, login, editing, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

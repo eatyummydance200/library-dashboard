@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home app && mkdir /app/data && chown app:app /app/data
+COPY scripts/fetch-font.py ./scripts/fetch-font.py
+RUN python scripts/fetch-font.py
 COPY app.py schema.sql seed.json ./
 COPY templates ./templates
 COPY static ./static
