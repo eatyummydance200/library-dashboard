@@ -18,6 +18,7 @@ function snapshot(date){const p=koreaParts(date);const local=new Date(Date.UTC(+
 function renderIcons(root=document){root.querySelectorAll('[data-icon]').forEach(e=>e.innerHTML=icon(e.dataset.icon));}
 function weekDates(){const p=snapshot(preview()||new Date());const monday=new Date(p.date);monday.setUTCDate(monday.getUTCDate()-p.day+weekOffset*7);return days.map((_,i)=>{const d=new Date(monday);d.setUTCDate(d.getUTCDate()+i);return d;});}
 function renderSchedule(){
+  if(activeView!=='dashboard'&&activeView!=='schedule')return;
   const dates=weekDates();
   const dateKey=date=>date.toISOString().slice(0,10);
   const now=new Date(), clock=koreaParts(now);

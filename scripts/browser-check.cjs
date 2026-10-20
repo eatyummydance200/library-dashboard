@@ -99,6 +99,7 @@ async function main() {
     await evaluate(`document.querySelector('[data-view="${id}"]').click()`);
     assert.equal(await evaluate(`document.querySelector('#${id}').hidden`),false);
   }
+  assert.equal(await evaluate('document.querySelector(".table-scroll").scrollTop>0'),true);
   await evaluate('document.querySelector("#staff-filter").value="0";document.querySelector("#staff-filter").dispatchEvent(new Event("change"))');
   assert.equal(await evaluate('document.querySelectorAll(".worker.dimmed").length>0'),true);
   await evaluate('selectedStaff="";renderSchedule()');
