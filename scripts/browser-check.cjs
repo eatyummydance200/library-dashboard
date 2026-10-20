@@ -66,10 +66,10 @@ async function main() {
   async function waitFor(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error('Timed out: '+expression);}
   await waitFor('document.readyState === "complete" && !!document.querySelector("input[name=username]")');
   await evaluate(`document.querySelector('input[name=username]').value=${JSON.stringify(settings.ADMIN_USER)};document.querySelector('input[name=password]').value=${JSON.stringify(settings.ADMIN_PASSWORD)};document.querySelector('form').requestSubmit()`);
-  await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".timetable") && typeof csrfToken !== "undefined" && !!csrfToken');
+  await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".week-board") && typeof csrfToken !== "undefined" && !!csrfToken');
   await waitFor('document.querySelector("#handoff").children.length===3');
   await evaluate('document.fonts.ready');
-  assert.equal(await evaluate('document.querySelectorAll(".timetable tbody tr").length'),24);
+  assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),24);
   assert.equal(await evaluate('document.querySelector("#metrics")'),null);
   assert.equal(await evaluate('document.querySelectorAll(".metric").length'),0);
   assert.equal(await evaluate('document.querySelector(".shift.current h3").textContent.includes("현재 근무")'),true);
@@ -79,8 +79,8 @@ async function main() {
   assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),1);
   assert.equal(await evaluate('document.fonts.check("16px Pretendard")'),true);
   assert.equal(await evaluate('getComputedStyle(document.body).fontFamily.includes("Pretendard")'),true);
-  assert.equal(await evaluate('parseFloat(getComputedStyle(document.querySelector(".slot-start")).fontSize)>=16'),true);
-  assert.equal(await evaluate('getComputedStyle(document.querySelector(".time")).position'),'sticky');
+  assert.equal(await evaluate('parseFloat(getComputedStyle(document.querySelector(".time-tick")).fontSize)>=16'),true);
+
   for(const [hour,minute,expected] of [[8,59,null],[9,0,'540'],[9,29,'540'],[9,30,'570'],[20,59,'1230'],[21,0,null]]){
     const stamp=new Date(wednesday);stamp.setUTCHours(hour-9,minute,0,0);
     await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${stamp.getTime()}]));}static now(){return ${stamp.getTime()};}};renderSchedule()`);
@@ -90,8 +90,13 @@ async function main() {
   await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${saturday}]));}};renderSchedule()`);
   assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),0);
   await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};renderSchedule()`);
-  assert.deepEqual(await evaluate('[...document.querySelectorAll(".timetable tbody tr")].slice(0,3).map(r=>Number(r.dataset.start))'),[540,570,600]);
-  assert.equal(await evaluate(`(()=>{const shift=rawShifts.find(s=>s.start%60===30);if(!shift)return true;const day=(new Date(shift.day+'T00:00:00Z').getUTCDay()+6)%7;return !document.querySelector('tr[data-start="'+(shift.start-30)+'"]').querySelectorAll('td')[day].querySelector('[data-shift="'+shift.id+'"]')&&!!document.querySelector('tr[data-start="'+shift.start+'"]').querySelectorAll('td')[day].querySelector('[data-shift="'+shift.id+'"]');})()`),true);
+  assert.deepEqual(await evaluate('[...document.querySelectorAll(".time-tick")].slice(0,3).map(r=>Number(r.dataset.start))'),[540,570,600]);
+  assert.equal(await evaluate(`(()=>{for(const shift of rawShifts){const block=document.querySelector('[data-shift="'+shift.id+'"]');if(!block||Number(block.dataset.start)!==shift.start||Number(block.dataset.end)!==shift.end||Number(block.style.gridRowStart)!==(shift.start-540)/30+1)return false;}return document.querySelectorAll('[data-shift]').length===rawShifts.length;})()`),true);
+  assert.equal(await evaluate(`(()=>{const layout=layoutShifts([{persistId:1,start:9,end:10,desk:true},{persistId:2,start:9.5,end:10.5,desk:true},{persistId:3,start:10,end:11,desk:true},{persistId:4,start:9,end:12,desk:false}]);return layout.lanes===3&&layout.entries.find(e=>e.persistId===1).lane===layout.entries.find(e=>e.persistId===3).lane&&layout.entries.find(e=>e.persistId===2).lane!==layout.entries.find(e=>e.persistId===1).lane;})()`),true);
+  assert.deepEqual(await evaluate('[...document.querySelectorAll("#handoff article")].map(e=>e.getAttribute("aria-label"))'),['이전 근무','현재 근무','다음 근무']);
+  assert.equal(await evaluate('document.querySelector("#dashboard .stats-card")'),null);
+  assert.equal(await evaluate('document.querySelector("#schedule .stats-card h2").textContent.startsWith("주당 근무 시간")'),true);
+  assert.equal(await evaluate('document.querySelector("#page-subtitle, .eyebrow")'),null);
   assert.equal(await evaluate('document.querySelectorAll(".staff-row").length>=7'),true);
   assert.equal(await evaluate('document.querySelector(".brand img").naturalWidth>0'),true);
   assert.equal(await evaluate('document.querySelector("#load-error").hidden'),true);
@@ -99,17 +104,36 @@ async function main() {
     await evaluate(`document.querySelector('[data-view="${id}"]').click()`);
     assert.equal(await evaluate(`document.querySelector('#${id}').hidden`),false);
   }
-  assert.equal(await evaluate('document.querySelector(".table-scroll").scrollTop>0'),true);
+
   await evaluate('document.querySelector("#staff-filter").value="0";document.querySelector("#staff-filter").dispatchEvent(new Event("change"))');
   assert.equal(await evaluate('document.querySelectorAll(".worker.dimmed").length>0'),true);
   await evaluate('selectedStaff="";renderSchedule()');
-  const week=await evaluate('document.querySelector(".table-scroll").dataset.week');
+  const week=await evaluate('document.querySelector(".week-board").dataset.week');
   await evaluate('document.querySelector("#next-week").click()');
-  await waitFor(`document.querySelector('.table-scroll').dataset.week!==${JSON.stringify(week)}`);
+  await waitFor(`document.querySelector('.week-board').dataset.week!==${JSON.stringify(week)}`);
   assert.equal(await evaluate('document.querySelectorAll(".now-line").length'),0);
   await evaluate('document.querySelector("#this-week").click()');
-  await waitFor(`document.querySelector('.table-scroll').dataset.week===${JSON.stringify(week)}`);
-  await evaluate('document.querySelector("#show-now").click()');
+  await waitFor(`document.querySelector('.week-board').dataset.week===${JSON.stringify(week)}`);
+
+  await evaluate('setView("tagging")');
+  await waitFor('!!document.querySelector(".tag-mark")');
+  assert.equal(await evaluate('document.querySelectorAll(".tagging-table thead th").length'),13);
+  if(local){
+    const tag=await evaluate('(()=>{const b=[...document.querySelectorAll(".tag-mark")].find(b=>Number(b.dataset.month)===9);return {person:b.dataset.tagPerson,before:b.getAttribute("aria-pressed")};})()');
+    await evaluate(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').click()`);
+    await waitFor(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').getAttribute('aria-pressed')!==${JSON.stringify(tag.before)}`);
+    await evaluate('loadTagging()');
+    assert.equal(await evaluate(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').getAttribute('aria-pressed')`),tag.before==='true'?'false':'true');
+    await evaluate(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').click()`);
+    await waitFor(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').getAttribute('aria-pressed')===${JSON.stringify(tag.before)}`);
+  }
+  const tagYearBefore=await evaluate('tagYear');
+  await evaluate('document.querySelector("#prev-tag-year").click()');
+  await waitFor('!!document.querySelector(".tag-mark")');
+  assert.equal(await evaluate('tagYear'),tagYearBefore-1);
+  await evaluate('document.querySelector("#this-tag-year").click()');
+  await waitFor('!!document.querySelector(".tag-mark")');
+  await evaluate('setView("dashboard")');
   if(local){
     await evaluate('setView("people");document.querySelector("[data-edit]").click()');
     await evaluate('document.querySelector("#contact-phone").value="010-1234-5678";document.querySelector("#contact-form").requestSubmit()');
@@ -124,28 +148,42 @@ async function main() {
     await waitFor('issues[0].done');
     await evaluate('setView("dashboard")');
     await call('Page.reload');
-    await waitFor('typeof user!=="undefined" && !!user && !!document.querySelector(".timetable")');
+    await waitFor('typeof user!=="undefined" && !!user && !!document.querySelector(".week-board")');
     assert.equal(await evaluate('staff[0].phone'),'010-1234-5678');
   }
   await evaluate('setView("dashboard")');
   await waitFor('document.querySelector("#handoff").children.length===3');
-  await evaluate('document.querySelector("#show-now").click()');
+
   for(const width of [390,700,768,1024,1280,1536]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
+    const size=await evaluate('(()=>{const b=document.querySelector(".week-board");return {w:b.clientWidth,sw:b.scrollWidth,h:b.clientHeight,sh:b.scrollHeight,tracks:[...b.querySelectorAll(".day-track")].map(e=>({w:e.clientWidth,sw:e.scrollWidth,h:e.clientHeight,sh:e.scrollHeight,display:getComputedStyle(e).display}))};})()');
+    assert.equal(size.sw<=size.w&&size.sh<=size.h,true,`schedule overflow at ${width}px: ${JSON.stringify(size)}`);
+    assert.equal(await evaluate('[...document.querySelectorAll(".day-track")].filter(e=>getComputedStyle(e).display!=="none").length'),width<=900?1:5);
+
   }
   await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
-  await evaluate('document.querySelector("#show-now").click()');
-  assert.equal(await evaluate('document.querySelector(".table-scroll").scrollTop>0'),true);
-  assert.equal(await evaluate('(()=>{const line=document.querySelector(".now-line").getBoundingClientRect(),view=document.querySelector(".table-scroll").getBoundingClientRect();return line.top>view.top+65&&line.top<view.bottom;})()'),true);
+
+
+  assert.equal(await evaluate('(()=>{const board=document.querySelector(".week-board");return board.scrollHeight<=board.clientHeight&&board.scrollWidth<=board.clientWidth;})()'),true);
   const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,local?'preview-readable.png':'preview-live.png'),Buffer.from(shot.data,'base64'));
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
-  await evaluate('document.querySelector("#show-now").click()');
+
+  await evaluate('setView("schedule");[...document.querySelectorAll("[data-day]")].find(b=>Number(b.dataset.day)===1).click()');
+  assert.equal(await evaluate('document.querySelector(".selected-day").getAttribute("aria-label").includes("화요일")'),true);
   const mobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-readable-mobile.png'),Buffer.from(mobileShot.data,'base64'));
+  await call('Emulation.setDeviceMetricsOverride',{width:1536,height:1000,deviceScaleFactor:1,mobile:false});
+  await evaluate('setView("schedule")');
+  const scheduleShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  writeFileSync(join(root,'preview-schedule.png'),Buffer.from(scheduleShot.data,'base64'));
+  await evaluate('setView("tagging")');
+  await waitFor('!!document.querySelector(".tag-mark")');
+  const tagShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  writeFileSync(join(root,'preview-tagging.png'),Buffer.from(tagShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 24 half-hour rows, boundary placement, current-time marker and week navigation, role groups, login, editing, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

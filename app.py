@@ -61,7 +61,7 @@ def create_app(config=None):
     with app.app_context():
         connection = db()
         version = connection.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1):
+        if version not in (0, 1, 2):
             raise RuntimeError('Unsupported database version; restore a compatible image')
         connection.execute('PRAGMA journal_mode=WAL')
         if version == 0:
@@ -79,6 +79,18 @@ def create_app(config=None):
                             (entry['id'] + 1, (monday + timedelta(days=offset)).isoformat(),
                              round(entry['start'] * 60), round(entry['end'] * 60),
                              'desk' if entry['desk'] else 'general'))
+        if version < 2:
+            connection.executescript('''BEGIN;
+                CREATE TABLE IF NOT EXISTS monthly_tags (
+                    staff_id INTEGER NOT NULL REFERENCES staff(id),
+                    year INTEGER NOT NULL CHECK(year BETWEEN 2000 AND 2100),
+                    month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+                    completed INTEGER NOT NULL CHECK(completed IN (0,1)),
+                    updated_by INTEGER NOT NULL REFERENCES users(id), updated_at TEXT NOT NULL,
+                    PRIMARY KEY(staff_id,year,month)
+                );
+                PRAGMA user_version=2;
+                COMMIT;''')
         if not connection.execute('SELECT 1 FROM users').fetchone():
             username = os.environ.get('ADMIN_USER', '')
             password = os.environ.get('ADMIN_PASSWORD', '')
@@ -379,6 +391,38 @@ def create_app(config=None):
         return jsonify(at=now.isoformat(), previous=active(previous_at), current=current,
                        next=active(next_boundary), previous_at=previous_boundary.isoformat() if previous_boundary else None,
                        next_at=next_boundary.isoformat() if next_boundary else None)
+
+    def tagging_period(year, month=1):
+        if not 2000 <= year <= 2100 or not 1 <= month <= 12:
+            fail('연도와 월을 확인해주세요.')
+
+    @bp.get('/api/tagging')
+    def get_tagging():
+        value = request.args.get('year', str(datetime.now(KOREA).year))
+        if not re.fullmatch(r'[0-9]{4}', value):
+            fail('연도를 확인해주세요.')
+        year = int(value)
+        tagging_period(year)
+        people = db().execute('SELECT id,name,active FROM staff WHERE active=1 OR id IN '
+                              '(SELECT staff_id FROM monthly_tags WHERE year=?) ORDER BY id', (year,))
+        tags = db().execute('SELECT staff_id,month,completed FROM monthly_tags WHERE year=?', (year,))
+        return jsonify(year=year, staff=[dict(row) for row in people], tags=[dict(row) for row in tags])
+
+    @bp.put('/api/tagging/<int:person_id>/<int:year>/<int:month>')
+    @admin
+    def save_tagging(person_id, year, month):
+        tagging_period(year, month)
+        completed = payload().get('completed')
+        if type(completed) is not bool:
+            fail('태깅 완료 여부를 확인해주세요.')
+        if not db().execute('SELECT 1 FROM staff WHERE id=?', (person_id,)).fetchone():
+            fail('근무자를 찾을 수 없습니다.', 404)
+        with db():
+            db().execute('INSERT INTO monthly_tags(staff_id,year,month,completed,updated_by,updated_at) '
+                         'VALUES (?,?,?,?,?,?) ON CONFLICT(staff_id,year,month) DO UPDATE SET '
+                         'completed=excluded.completed,updated_by=excluded.updated_by,updated_at=excluded.updated_at',
+                         (person_id, year, month, completed, g.user['id'], datetime.now(timezone.utc).isoformat()))
+        return jsonify(ok=True)
 
     @bp.get('/api/issues')
     def get_issues():

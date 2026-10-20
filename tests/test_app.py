@@ -157,6 +157,48 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(restarted.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(restarted.db().execute('SELECT count(*) FROM issues').fetchone()[0], 1)
 
+    def test_monthly_tagging_persistence_validation_and_permissions(self):
+        self.assertEqual(self.client.get(BASE + '/api/tagging?year=2026').status_code, 401)
+        self.login()
+        path = '/tagging/1/2026/9'
+        self.assertEqual(self.client.put(BASE + '/api' + path, json={'completed': True}).status_code, 403)
+        self.assertEqual(self.write(path, {'completed': True}, 'put').status_code, 200)
+        self.assertEqual(self.write(path, {'completed': True}, 'put').status_code, 200)
+        result = self.client.get(BASE + '/api/tagging?year=2026').json
+        self.assertEqual(result['tags'], [{'staff_id': 1, 'month': 9, 'completed': 1}])
+        self.assertEqual(self.client.get(BASE + '/api/tagging?year=2027').json['tags'], [])
+        self.assertEqual(self.write('/staff/1', {'name': '보존', 'phone': '', 'active': False}, 'put').status_code, 200)
+        self.assertEqual(len(self.client.get(BASE + '/api/tagging?year=2026').json['staff']), 2)
+        self.assertEqual(self.write(path, {'completed': False}, 'put').status_code, 200)
+        for value in [1, 'true', None]:
+            self.assertEqual(self.write(path, {'completed': value}, 'put').status_code, 400)
+        for year in ['bad', '1999', '2101', '2026.0']:
+            self.assertEqual(self.client.get(BASE + '/api/tagging?year=' + year).status_code, 400)
+        for invalid in ['/tagging/1/2026/13', '/tagging/1/1999/9', '/tagging/1/2026/0']:
+            self.assertEqual(self.write(invalid, {'completed': True}, 'put').status_code, 400)
+        self.assertEqual(self.write('/tagging/999/2026/9', {'completed': True}, 'put').status_code, 404)
+        self.write('/users', {'username': 'worker', 'password': 'worker-password-123', 'role': 'worker'})
+        worker = self.app.test_client()
+        self.login(worker, 'worker', 'worker-password-123')
+        self.assertEqual(worker.get(BASE + '/api/tagging?year=2026').status_code, 200)
+        self.assertEqual(self.write(path, {'completed': True}, 'put', client=worker).status_code, 403)
+        restarted = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with restarted.app_context():
+            self.assertEqual(restarted.db().execute('SELECT completed FROM monthly_tags').fetchone()[0], 0)
+
+    def test_tagging_migration_preserves_existing_database(self):
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript('DROP TABLE monthly_tags; PRAGMA user_version=1;')
+        upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with upgraded.app_context():
+            connection = upgraded.db()
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
+            self.assertEqual(connection.execute('SELECT count(*) FROM monthly_tags').fetchone()[0], 0)
+            self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
     def test_invalid_dates_json_and_foreign_keys(self):
         self.login()
         self.assertEqual(self.client.get(BASE + '/api/schedule?week=wrong').status_code, 400)

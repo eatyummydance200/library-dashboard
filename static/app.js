@@ -17,60 +17,47 @@ function koreaParts(date){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:
 function snapshot(date){const p=koreaParts(date);const local=new Date(Date.UTC(+p.year,+p.month-1,+p.day));return {day:(local.getUTCDay()+6)%7,time:+p.hour+(+p.minute/60),date:local,month:+p.month,dayNumber:+p.day};}
 function renderIcons(root=document){root.querySelectorAll('[data-icon]').forEach(e=>e.innerHTML=icon(e.dataset.icon));}
 function weekDates(){const p=snapshot(preview()||new Date());const monday=new Date(p.date);monday.setUTCDate(monday.getUTCDate()-p.day+weekOffset*7);return days.map((_,i)=>{const d=new Date(monday);d.setUTCDate(d.getUTCDate()+i);return d;});}
+function layoutShifts(entries){
+  const placed=[], counts=[];
+  for(const desk of [true,false]){
+    const ends=[], offset=counts.reduce((a,b)=>a+b,0);
+    for(const shift of entries.filter(s=>s.desk===desk).sort((a,b)=>a.start-b.start||a.end-b.end||a.persistId-b.persistId)){
+      let lane=ends.findIndex(end=>end<=shift.start);
+      if(lane<0)lane=ends.length;
+      ends[lane]=shift.end;placed.push({...shift,lane:offset+lane});
+    }
+    counts.push(Math.max(1,ends.length));
+  }
+  return {entries:placed,lanes:counts[0]+counts[1]};
+}
+let selectedDay=Math.min(snapshot(new Date()).day,4);
 function renderSchedule(){
   if(activeView!=='dashboard'&&activeView!=='schedule')return;
-  const dates=weekDates();
-  const dateKey=date=>date.toISOString().slice(0,10);
-  const now=new Date(), clock=koreaParts(now);
-  const todayKey=`${clock.year}-${clock.month}-${clock.day}`;
-  const todayColumn=dates.findIndex(d=>dateKey(d)===todayKey);
-  const minute=Number(clock.hour)*60+Number(clock.minute);
-  const operating=minute>=540&&minute<1260&&snapshot(now).day<5;
-  const currentSlot=operating&&todayColumn>=0?Math.floor((minute-540)/30):-1;
+  const dates=weekDates(), dateKey=date=>date.toISOString().slice(0,10);
+  const now=new Date(), clock=koreaParts(now), todayKey=`${clock.year}-${clock.month}-${clock.day}`;
+  const todayColumn=dates.findIndex(d=>dateKey(d)===todayKey), minute=Number(clock.hour)*60+Number(clock.minute);
+  const currentSlot=minute>=540&&minute<1260&&todayColumn>=0?Math.floor((minute-540)/30):-1;
   const slot=activeView==='schedule'?$('#full-schedule-slot'):$('#schedule-slot');
-  const other=activeView==='schedule'?$('#schedule-slot'):$('#full-schedule-slot');
-  const previous=slot.querySelector('.table-scroll');
-  const saved=previous?.dataset.week===dateKey(dates[0])?{top:previous.scrollTop,left:previous.scrollLeft}:null;
-  other.innerHTML='';
-  const roleName=desk=>desk?'데스크':'대기';
-  const rows=Array.from({length:24},(_,index)=>{
-    const start=540+index*30,end=start+30;
-    const current=index===currentSlot;
-    return `<tr data-start="${start}" class="${start%60===0?'hour-start ':''}${current?'current-row':''}" ${current?'aria-current="time"':''}>
-      <th class="time" scope="row" aria-label="${formatTime(start/60)}부터 ${formatTime(end/60)}까지"><span class="slot-start">${formatTime(start/60)}</span><span class="slot-end">${formatTime(end/60)}</span></th>
-      ${days.map((_,day)=>{
-        const entries=shifts[day].filter(s=>s.start*60<end&&s.end*60>start);
-        return `<td class="${day===todayColumn?'today-col':''}"><div class="cell-items">${entries.map(s=>`<button type="button" data-shift="${s.persistId}" class="worker ${s.desk?'desk':'standby'} ${selectedStaff!==''&&selectedStaff!==String(s.id)?'dimmed':''}" title="${esc(staff[s.id].name)} · ${formatTime(s.start)}–${formatTime(s.end)} · ${roleName(s.desk)} 근무"><strong>${esc(staff[s.id].name)}</strong><small>${roleName(s.desk)}</small></button>`).join('')||'<span class="empty-slot" aria-label="배정 없음">—</span>'}</div>${current&&day===todayColumn?`<span class="now-line" style="top:${(minute-start)/30*100}%"><span>지금 ${clock.hour}:${clock.minute}</span></span>`:''}</td>`;
-      }).join('')}
-    </tr>`;
-  }).join('');
+  (activeView==='schedule'?$('#schedule-slot'):$('#full-schedule-slot')).innerHTML='';
+  const ticks=Array.from({length:24},(_,i)=>`<div class="time-tick ${i===currentSlot?'current-row':''} ${i%2?'half-hour':''}" data-start="${540+i*30}" ${i===currentSlot?'aria-current="time"':''}>${formatTime(9+i/2)}</div>`).join('');
   slot.innerHTML=`<div class="${activeView==='schedule'?'card schedule-only':''}">
-    <div class="card-head schedule-head"><div><h2>주간 근무 시간표</h2><p class="subtitle">30분 단위 · 데스크와 대기 근무를 구분해 확인하세요.</p></div>
-      <div class="week-controls"><button class="icon-btn" id="prev-week" aria-label="이전 주">${icon('left')}</button><strong>${dates[0].getUTCMonth()+1}.${String(dates[0].getUTCDate()).padStart(2,'0')} – ${dates[4].getUTCMonth()+1}.${String(dates[4].getUTCDate()).padStart(2,'0')}</strong><button class="icon-btn" id="next-week" aria-label="다음 주">${icon('chevron')}</button><button class="btn" id="this-week">이번 주</button></div>
+    <div class="card-head schedule-head"><h2>주간 근무 시간표</h2><div class="week-controls"><button class="icon-btn" id="prev-week" aria-label="이전 주">${icon('left')}</button><strong>${dates[0].getUTCMonth()+1}.${String(dates[0].getUTCDate()).padStart(2,'0')} – ${dates[4].getUTCMonth()+1}.${String(dates[4].getUTCDate()).padStart(2,'0')}</strong><button class="icon-btn" id="next-week" aria-label="다음 주">${icon('chevron')}</button><button class="btn" id="this-week">이번 주</button></div></div>
+    <div class="schedule-tools"><div class="legend"><span class="desk-legend"><i></i>데스크</span><span class="standby-legend"><i></i>대기</span></div><div class="schedule-filters">${user?.role==='admin'?'<button class="btn" id="add-shift">＋ 근무 추가</button><button class="btn" id="copy-week">주 복사</button>':''}<select class="select" id="staff-filter" aria-label="시간표 근무자 선택"><option value="">전체 근무자</option>${staff.map(s=>`<option value="${s.id}" ${selectedStaff===String(s.id)?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div></div>
+    <div class="day-picker" role="group" aria-label="시간표 요일 선택">${days.map((d,i)=>`<button type="button" data-day="${i}" aria-pressed="${selectedDay===i}">${d} <small>${dates[i].getUTCMonth()+1}.${dates[i].getUTCDate()}</small></button>`).join('')}</div>
+    <div class="week-board" data-week="${dateKey(dates[0])}" aria-label="30분 단위 주간 근무 시간표">
+      <div class="time-axis"><div class="day-heading">시간</div><div class="time-ticks">${ticks}<span class="time-end">21:00</span></div></div>
+      ${days.map((day,i)=>{const layout=layoutShifts(shifts[i]);return `<section class="day-track ${selectedDay===i?'selected-day':''} ${todayColumn===i?'today-col':''}" aria-label="${dates[i].getUTCMonth()+1}월 ${dates[i].getUTCDate()}일 ${day}요일"><h3 class="day-heading">${day}<span>${dates[i].getUTCMonth()+1}.${dates[i].getUTCDate()}${todayColumn===i?' · 오늘':''}</span></h3><div class="track-grid" style="--lanes:${layout.lanes}">${layout.entries.map(s=>{const span=(s.end-s.start)*2, name=esc(staff[s.id].name), label=`${name} · ${formatTime(s.start)}–${formatTime(s.end)} · ${s.desk?'데스크':'대기'}`;return `<button type="button" data-shift="${s.persistId}" data-lane="${s.lane}" data-start="${s.start*60}" data-end="${s.end*60}" class="worker ${s.desk?'desk':'standby'} ${span===1?'short-shift':''} ${selectedStaff!==''&&selectedStaff!==String(s.id)?'dimmed':''}" style="grid-row:${(s.start-9)*2+1}/span ${span};grid-column:${s.lane+1}" title="${label}" aria-label="${label}"><strong>${name}</strong>${span>=3?`<small>${s.desk?'데스크':'대기'}</small>`:''}${span>=4?`<time>${formatTime(s.start)}<br>–${formatTime(s.end)}</time>`:''}</button>`;}).join('')}${!layout.entries.length?'<span class="empty-day">배정 없음</span>':''}${i===todayColumn&&currentSlot>=0?`<div class="current-band" style="top:${currentSlot/24*100}%"></div><span class="now-line" style="top:${(minute-540)/720*100}%"><span>현재 ${clock.hour}:${clock.minute}</span></span>`:''}</div></section>`;}).join('')}
     </div>
-    ${user?.role==='admin'?'<div class="edit-toolbar"><button class="btn" id="add-shift">＋ 근무 추가</button><button class="btn" id="copy-week">다른 주에서 복사</button><span class="hint">근무 이름을 누르면 수정할 수 있어요.</span></div>':''}
-    <div class="schedule-tools"><div class="legend"><span class="desk-legend"><i></i>데스크 담당</span><span class="standby-legend"><i></i>대기 근무</span></div><div class="schedule-filters"><button class="btn" id="show-now" ${currentSlot<0?'disabled':''}>현재 시간으로</button><select class="select" id="staff-filter" aria-label="시간표 근무자 선택"><option value="">전체 근무자</option>${staff.map(s=>`<option value="${s.id}" ${selectedStaff===String(s.id)?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div></div>
-    <div class="schedule-clock"><span class="clock-label">${icon('clock')} 한국 시간 ${clock.month}.${clock.day} ${clock.hour}:${clock.minute}</span><span>${!operating?'운영시간 외 · 평일 09:00–21:00':todayColumn<0?'다른 주를 보고 있습니다.':'현재 근무 구간을 파란 선으로 표시합니다.'}</span></div>
-    <div class="table-scroll" data-week="${dateKey(dates[0])}" tabindex="0" aria-label="주간 시간표, 가로와 세로로 스크롤할 수 있습니다."><table class="timetable"><caption class="sr-only">월요일부터 금요일, 09:00부터 21:00까지 30분 단위 근무 시간표. 파란색은 데스크 담당, 노란색은 대기 근무입니다.</caption><thead><tr><th scope="col">시간</th>${days.map((day,i)=>`<th scope="col" class="${todayColumn===i?'today':''}"><span>${day}요일</span><span class="day-date">${dates[i].getUTCMonth()+1}.${String(dates[i].getUTCDate()).padStart(2,'0')}${todayColumn===i?' · 오늘':''}</span></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="table-foot"><span>시간은 한국 시간 기준입니다.</span><span>파랑 · 데스크 담당 / 노랑 · 대기 근무</span></div>
   </div>`;
-  const scroller=slot.querySelector('.table-scroll');
-  if(saved){scroller.scrollTop=saved.top;scroller.scrollLeft=saved.left;}
   $('#prev-week').onclick=()=>{weekOffset--;loadWeek().catch(showError);};
   $('#next-week').onclick=()=>{weekOffset++;loadWeek().catch(showError);};
-  $('#this-week').onclick=()=>{$('#preview-time').value=localInput();manualTime=false;weekOffset=0;loadWeek().then(loadStatus).catch(showError);};
+  $('#this-week').onclick=()=>{$('#preview-time').value=localInput();manualTime=false;weekOffset=0;selectedDay=Math.min(snapshot(new Date()).day,4);loadWeek().then(loadStatus).catch(showError);};
   $('#staff-filter').onchange=e=>{selectedStaff=e.target.value;renderSchedule();};
-  function focusCurrent(behavior='auto'){
-    const row=slot.querySelector('.current-row'),cell=row?.querySelector('.today-col');
-    if(!row||!cell)return;
-    scroller.scrollTo({top:Math.max(0,row.offsetTop-scroller.clientHeight/2+row.offsetHeight/2),left:Math.max(0,cell.offsetLeft-(scroller.clientWidth-cell.offsetWidth)/2),behavior});
-  }
-  $('#show-now').onclick=()=>focusCurrent(matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth');
-  if(!saved&&currentSlot>=0)focusCurrent();
+  slot.querySelectorAll('[data-day]').forEach(button=>button.onclick=()=>{selectedDay=Number(button.dataset.day);renderSchedule();});
 }
 function renderStats(){
   $('#staff-stats').innerHTML=staff.map((s,i)=>`<div class="staff-row"><div class="staff-name"><span class="avatar av-${i%7}">${esc(s.name.slice(0,1))}</span>${esc(s.name)}</div><span>${s.hours}<small>h</small></span><span class="blue">${s.desk}<small>h</small></span><span>${s.open}<small>회</small></span><span>${s.close}<small>회</small></span></div>`).join('');
 }
-function renderNav(){$('#navigation').innerHTML=navItems.map(([id,label,ic])=>`<button data-view="${id}" class="${activeView===id?'active':''}" ${activeView===id?'aria-current="page"':''}>${icon(ic)}${label}${['archive','tagging'].includes(id)?'<span class="soon">SOON</span>':''}${id==='issues'?`<span class="count-badge">${issues.filter(i=>!i.done).length}</span>`:''}</button>`).join('');}
-function setView(id){if(!navItems.some(n=>n[0]===id))return;activeView=id;document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==id);const title=navItems.find(n=>n[0]===id)[1];$('#breadcrumb').textContent=title;$('#page-title').textContent=id==='dashboard'?'근무 대시보드':title;$('#page-subtitle').textContent={dashboard:'지금 근무 중인 사람과 이번 주 시간표를 확인하세요.',schedule:'우리의 한 주를 함께 확인하고, 근무를 준비하세요.',people:'함께하는 근무자들의 정보를 한곳에서 관리하세요.',issues:'오늘의 이슈와 다음 근무자를 위한 인계 사항을 모아요.',archive:'과월호 관리를 위한 공간입니다.',tagging:'태깅 관리를 위한 공간입니다.'}[id];renderNav();renderSchedule();applyPermissions();if(id==='people'&&user.role==='admin')loadUsers().catch(showError);}
+function renderNav(){$('#navigation').innerHTML=navItems.map(([id,label,ic])=>`<button data-view="${id}" class="${activeView===id?'active':''}" ${activeView===id?'aria-current="page"':''}>${icon(ic)}${label}${id==='archive'?'<span class="soon">SOON</span>':''}${id==='issues'?`<span class="count-badge">${issues.filter(i=>!i.done).length}</span>`:''}</button>`).join('');}
+function setView(id){if(!navItems.some(n=>n[0]===id))return;activeView=id;document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==id);const title=navItems.find(n=>n[0]===id)[1];$('#breadcrumb').textContent=title;$('#page-title').textContent=id==='dashboard'?'근무 대시보드':title;renderNav();renderSchedule();applyPermissions();if(id==='tagging')loadTagging().catch(showError);if(id==='people'&&user.role==='admin')loadUsers().catch(showError);}
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,2600);}
