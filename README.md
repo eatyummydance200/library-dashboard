@@ -32,6 +32,10 @@ python -m unittest discover -s tests -v
 
 `seed.json`은 빈 템플릿이다. 실제 근무자·시간표·전화번호는 공개 소스에 포함하지 않는다. 초기 데이터는 비공개 환경변수로 넣는다. 기존 DB가 있으면 초기 데이터·관리자 환경변수로 덮어쓰지 않는다. 비밀번호 변경은 로그인 후 계정 메뉴에서 한다.
 
+## 운영 주소
+
+https://eatyummydance200.tail72d30b.ts.net/libaryDashBoard
+
 ## Server Desk 배포
 
 `main` push → GitHub Actions 테스트 → `ghcr.io/eatyummydance200/library-dashboard:main` 및 커밋 SHA 태그 게시. 배포는 Server Desk에서 실행한다. 비공개 GHCR 패키지는 기존 Server Desk에 읽기 자격 증명을 설정해야 하며, 공개 패키지는 익명 pull 가능 여부를 확인한다.
@@ -53,6 +57,8 @@ sudo tailscale funnel --bg --https=443 \
   --set-path=/libaryDashBoard \
   http://127.0.0.1:8090/libaryDashBoard
 ```
+
+초기 서버에서 레지스트리 연결 전 기동이 필요하면 `python scripts/deploy.py bootstrap`으로 같은 앱 등록과 로컬 이미지 기동을 수행한다. 이미지 게시 후 `python scripts/deploy.py deploy`로 Server Desk 이미지 배포에 전환한다. 두 명령은 비공개 `.runtime.env`와 기존 관리 서비스의 `.env`를 사용하며 비밀값을 출력하지 않는다.
 
 외부 주소의 `/libaryDashBoard`는 `/libaryDashBoard/`로 이동한다. 로그인·정적 파일·API·쿠키 모두 해당 경로를 사용한다.
 

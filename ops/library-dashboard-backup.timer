@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily library dashboard backup at 04:00 Korea time
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Seoul
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

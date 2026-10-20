@@ -1,0 +1,11 @@
+.venv/
+.runtime.env
+data/
+backups/
+__pycache__/
+*.pyc
+*.sqlite3*
+.deployment-state.json
+/preview*.png
+/index.html
+/check.cjs

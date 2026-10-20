@@ -1,0 +1,9 @@
+.git
+.venv
+.runtime.env
+data
+backups
+*.sqlite3*
+__pycache__
+preview*.png
+.deployment-state.json
