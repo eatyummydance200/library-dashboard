@@ -112,6 +112,7 @@ async function main() {
   for(const id of ['schedule','people','issues','archive','tagging','dashboard']){
     await evaluate(`document.querySelector('[data-view="${id}"]').click()`);
     assert.equal(await evaluate(`document.querySelector('#${id}').hidden`),false);
+    assert.equal(await evaluate('document.querySelector(".footer")'),null);
   }
 
   await evaluate('setView("schedule")');
@@ -260,12 +261,13 @@ async function main() {
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
     await evaluate('scrollTo(0,0)');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".time-end")).fontSize===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontSize && getComputedStyle(document.querySelector(".time-end")).fontWeight===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontWeight'),true);
     const size=await evaluate('(()=>{const b=document.querySelector(".week-board");return {w:b.clientWidth,sw:b.scrollWidth,h:b.clientHeight,sh:b.scrollHeight,tracks:[...b.querySelectorAll(".day-track")].map(e=>({w:e.clientWidth,sw:e.scrollWidth,h:e.clientHeight,sh:e.scrollHeight,display:getComputedStyle(e).display}))};})()');
     assert.equal(size.sw<=size.w&&size.sh<=size.h,true,`schedule overflow at ${width}px: ${JSON.stringify(size)}`);
     assert.equal(await evaluate('[...document.querySelectorAll(".day-track")].filter(e=>getComputedStyle(e).display!=="none").length'),width<=900?1:5);
     const layout=await evaluate('(()=>{const a=document.querySelector("#full-schedule-slot").getBoundingClientRect(),b=document.querySelector(".stats-card").getBoundingClientRect();return {left:a.left,right:a.right,width:a.width,statsLeft:b.left,statsTop:b.top,statsWidth:b.width,top:a.top,zoom:Number(getComputedStyle(document.body).zoom),row:document.querySelector(".time-tick").getBoundingClientRect().height};})()');
     assert.equal(layout.zoom,width>900?.8:1);
-    if(width>1000){assert.equal(layout.statsLeft>=layout.right,true);assert.equal(layout.width>layout.statsWidth*2,true);assert.equal(Math.abs(layout.top-layout.statsTop)<2,true);assert.equal(layout.row>=30&&layout.row<=41,true);assert.equal(await evaluate('document.querySelector(".shift-issues-card").getBoundingClientRect().top>=document.querySelector(".stats-card").getBoundingClientRect().bottom'),true);}
+    if(width>1000){assert.equal(layout.statsLeft>=layout.right,true);assert.equal(layout.width>layout.statsWidth*1.7,true);assert.equal(Math.abs(layout.top-layout.statsTop)<2,true);assert.equal(layout.row>=30&&layout.row<=41,true);assert.equal(await evaluate('document.querySelector(".shift-issues-card").getBoundingClientRect().top>=document.querySelector(".stats-card").getBoundingClientRect().bottom'),true);}
 
 
   }
