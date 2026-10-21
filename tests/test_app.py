@@ -188,16 +188,145 @@ class ApplicationTests(unittest.TestCase):
 
     def test_tagging_migration_preserves_existing_database(self):
         with sqlite3.connect(self.database) as connection:
-            connection.executescript('DROP TABLE monthly_tags; PRAGMA user_version=1;')
+            connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
+                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE monthly_tags; PRAGMA user_version=1;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 3)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
             self.assertEqual(connection.execute('SELECT count(*) FROM monthly_tags').fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
+    def archive_roster(self):
+        for i in range(5):
+            self.assertEqual(self.write('/staff', {'name': f'추첨 근무자 {i}', 'phone': ''}).status_code, 201)
+
+    def test_archive_monthly_draw_is_unique_and_preserves_history(self):
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-10').status_code, 401)
+        self.login()
+        self.assertEqual(self.client.post(BASE + '/api/archive/draw', json={'month': '2026-10'}).status_code, 403)
+        for value in [None, 202610, '2026-1', '2026-13', '2026-00', '1999-12', '2101-01']:
+            self.assertEqual(self.write('/archive/draw', {'month': value}).status_code, 400)
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-10'}).status_code, 400)
+        self.assertIsNone(self.client.get(BASE + '/api/archive?month=2026-10').json['draw'])
+        self.archive_roster()
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-10'}).status_code, 201)
+        before = self.client.get(BASE + '/api/archive?month=2026-10').json
+        assignments = before['assignments']
+        self.assertEqual(len(assignments), 7)
+        self.assertEqual({a['staff_id'] for a in assignments}, set(range(1, 8)))
+        self.assertEqual([a['group_number'] for a in assignments], list(range(1, 8)))
+        self.assertEqual(sum(len(a['tasks']) for a in assignments), 20)
+        self.assertEqual([t['newspaper'] for t in assignments[0]['tasks']], ['중앙', '코헤', 'FT'])
+        self.assertEqual([t['newspaper'] for t in assignments[-1]['tasks']], ['한국일보', '한겨레', '뉴탐'])
+        self.assertTrue(all(not t['completed'] for a in assignments for t in a['tasks']))
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-10'}).status_code, 409)
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-10').json['assignments'], assignments)
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-11'}).status_code, 201)
+        first = assignments[0]
+        self.write('/staff/' + str(first['staff_id']), {'name': '변경된 이름', 'phone': '', 'active': False}, 'put')
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-10').json['assignments'], assignments)
+        self.assertIsNone(self.client.get(BASE + '/api/archive?month=2026-12').json['draw'])
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=wrong').status_code, 400)
+        with self.app.app_context():
+            self.assertEqual(self.app.db().execute('SELECT count(*) FROM archive_draws').fetchone()[0], 2)
+
+    def test_simultaneous_archive_draw_keeps_one_result(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        self.login()
+        self.archive_roster()
+        clients = [self.app.test_client(), self.app.test_client()]
+        for client in clients:
+            self.login(client)
+        tokens = [client.get(BASE + '/api/me').json['csrf'] for client in clients]
+        barrier = Barrier(2)
+
+        def draw(index):
+            barrier.wait(timeout=5)
+            return clients[index].post(BASE + '/api/archive/draw', json={'month': '2026-10'},
+                                       headers={'X-CSRF-Token': tokens[index]}).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sorted(pool.map(draw, range(2))), [201, 409])
+        with self.app.app_context():
+            self.assertEqual(self.app.db().execute('SELECT count(*) FROM archive_tasks').fetchone()[0], 20)
+
+    def test_archive_completion_ownership_audit_backup_and_restart(self):
+        self.login()
+        self.archive_roster()
+        self.write('/archive/draw', {'month': '2026-10'})
+        assignments = self.client.get(BASE + '/api/archive?month=2026-10').json['assignments']
+        own = next(a for a in assignments if a['staff_id'] == 1)['tasks'][0]['id']
+        other = next(a for a in assignments if a['staff_id'] != 1)['tasks'][0]['id']
+        self.assertEqual(self.write('/users', {'username': 'worker', 'password': 'worker-password-123',
+                                               'role': 'worker', 'staff_id': 1}).status_code, 201)
+        worker = self.app.test_client()
+        self.login(worker, 'worker', 'worker-password-123')
+        self.assertEqual(worker.get(BASE + '/api/me').json['user']['staff_id'], 1)
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-12'}, client=worker).status_code, 403)
+        self.assertEqual(self.write('/archive/tasks/' + str(other), {'completed': True}, 'put', worker).status_code, 403)
+        self.assertEqual(self.write('/users/2', {'staff_id': 2}, 'patch', worker).status_code, 403)
+        own_path = '/archive/tasks/' + str(own)
+        self.assertEqual(worker.put(BASE + '/api' + own_path, json={'completed': True}).status_code, 403)
+        self.assertEqual(self.write(own_path, {'completed': 'true'}, 'put', worker).status_code, 400)
+        self.assertEqual(self.write('/archive/tasks/999999', {'completed': True}, 'put', worker).status_code, 404)
+        self.assertEqual(self.write(own_path, {'completed': True}, 'put', worker).status_code, 200)
+        task_rows = lambda client: [t for a in client.get(BASE + '/api/archive?month=2026-10').json['assignments'] for t in a['tasks']]
+        saved = next(t for t in task_rows(worker) if t['id'] == own)
+        self.assertEqual(saved['completed'], 1)
+        self.assertEqual(saved['completed_by_name'], 'worker')
+        self.assertTrue(saved['completed_at'])
+        self.write(own_path, {'completed': True}, 'put', worker)
+        self.assertEqual(next(t for t in task_rows(worker) if t['id'] == own), saved)
+        self.write(own_path, {'completed': False}, 'put', worker)
+        cleared = next(t for t in task_rows(worker) if t['id'] == own)
+        self.assertEqual(cleared['completed'], 0)
+        self.assertIsNone(cleared['completed_at'])
+        self.assertIsNone(cleared['completed_by'])
+        self.assertEqual(self.write('/archive/tasks/' + str(other), {'completed': True}, 'put').status_code, 200)
+        backup = self.client.get(BASE + '/api/backup').data
+        saved_backup = Path(self.directory.name) / 'archive-backup.sqlite3'
+        saved_backup.write_bytes(backup)
+        with sqlite3.connect(saved_backup) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM archive_assignments').fetchone()[0], 7)
+            self.assertEqual(connection.execute('SELECT sum(completed) FROM archive_tasks').fetchone()[0], 1)
+        restarted = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with restarted.app_context():
+            self.assertEqual(restarted.db().execute('SELECT count(*) FROM archive_tasks').fetchone()[0], 20)
+        self.assertEqual(self.write('/users/2', {'staff_id': None}, 'patch').status_code, 200)
+        self.assertEqual(worker.get(BASE + '/api/me').status_code, 401)
+        self.login(worker, 'worker', 'worker-password-123')
+        self.assertEqual(self.write(own_path, {'completed': True}, 'put', worker).status_code, 403)
+
+    def test_account_staff_link_validation_and_version_two_migration(self):
+        self.login()
+        for value in [True, '1', 999]:
+            self.assertEqual(self.write('/users', {'username': 'worker', 'password': 'worker-password-123',
+                                                  'role': 'worker', 'staff_id': value}).status_code, 400)
+        self.write('/users', {'username': 'worker', 'password': 'worker-password-123', 'role': 'worker'})
+        self.assertEqual(self.write('/users/2', {'staff_id': 1}, 'patch').status_code, 200)
+        self.assertEqual(self.client.get(BASE + '/api/users').json[1]['staff_id'], 1)
+        self.assertEqual(self.write('/users/2', {'staff_id': False}, 'patch').status_code, 400)
+        self.assertEqual(self.write('/users/999', {'staff_id': 1}, 'patch').status_code, 404)
+        self.assertEqual(self.write('/users/2', {}, 'patch').status_code, 400)
+        self.write('/tagging/1/2026/9', {'completed': True}, 'put')
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
+                                     'ALTER TABLE users DROP COLUMN staff_id; PRAGMA user_version=2;')
+        upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with upgraded.app_context():
+            connection = upgraded.db()
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(connection.execute('SELECT count(*) FROM users').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT completed FROM monthly_tags').fetchone()[0], 1)
+            self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_invalid_dates_json_and_foreign_keys(self):
         self.login()

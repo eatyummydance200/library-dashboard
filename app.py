@@ -17,6 +17,11 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT = Path(__file__).resolve().parent
 KOREA = ZoneInfo('Asia/Seoul')
+ARCHIVE_GROUPS = [
+    ['중앙', '코헤', 'FT'], ['국민', '경기', '경인'], ['동아', '아사히', '인민'],
+    ['조선', '코탐'], ['매일경제', '전자', '요미'], ['한국경제', '인천', '경향'],
+    ['한국일보', '한겨레', '뉴탐'],
+]
 
 
 def create_app(config=None):
@@ -61,7 +66,7 @@ def create_app(config=None):
     with app.app_context():
         connection = db()
         version = connection.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1, 2):
+        if version not in (0, 1, 2, 3):
             raise RuntimeError('Unsupported database version; restore a compatible image')
         connection.execute('PRAGMA journal_mode=WAL')
         if version == 0:
@@ -90,6 +95,28 @@ def create_app(config=None):
                     PRIMARY KEY(staff_id,year,month)
                 );
                 PRAGMA user_version=2;
+                COMMIT;''')
+        if version < 3:
+            connection.executescript('''BEGIN IMMEDIATE;
+                ALTER TABLE users ADD COLUMN staff_id INTEGER REFERENCES staff(id);
+                CREATE TABLE archive_draws (
+                    id INTEGER PRIMARY KEY, month TEXT NOT NULL UNIQUE,
+                    created_by INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL
+                );
+                CREATE TABLE archive_assignments (
+                    id INTEGER PRIMARY KEY, draw_id INTEGER NOT NULL REFERENCES archive_draws(id),
+                    group_number INTEGER NOT NULL CHECK(group_number BETWEEN 1 AND 7),
+                    staff_id INTEGER NOT NULL REFERENCES staff(id), staff_name TEXT NOT NULL,
+                    UNIQUE(draw_id,group_number), UNIQUE(draw_id,staff_id)
+                );
+                CREATE TABLE archive_tasks (
+                    id INTEGER PRIMARY KEY, assignment_id INTEGER NOT NULL REFERENCES archive_assignments(id),
+                    position INTEGER NOT NULL, newspaper TEXT NOT NULL,
+                    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
+                    completed_by INTEGER REFERENCES users(id), completed_at TEXT,
+                    UNIQUE(assignment_id,position)
+                );
+                PRAGMA user_version=3;
                 COMMIT;''')
         if not connection.execute('SELECT 1 FROM users').fetchone():
             username = os.environ.get('ADMIN_USER', '')
@@ -151,7 +178,7 @@ def create_app(config=None):
     def authentication():
         g.user = None
         if session.get('user_id'):
-            row = db().execute('SELECT id,username,role,active,version FROM users WHERE id=?',
+            row = db().execute('SELECT id,username,role,active,version,staff_id FROM users WHERE id=?',
                                (session['user_id'],)).fetchone()
             if row and row['active'] and row['version'] == session.get('version'):
                 g.user = dict(row)
@@ -253,7 +280,7 @@ def create_app(config=None):
 
     @bp.get('/api/me')
     def me():
-        return jsonify(user={k: g.user[k] for k in ('id', 'username', 'role')}, csrf=csrf())
+        return jsonify(user={k: g.user[k] for k in ('id', 'username', 'role', 'staff_id')}, csrf=csrf())
 
     @bp.get('/api/staff')
     def get_staff():
@@ -424,6 +451,69 @@ def create_app(config=None):
                          (person_id, year, month, completed, g.user['id'], datetime.now(timezone.utc).isoformat()))
         return jsonify(ok=True)
 
+    def archive_month(value):
+        if not isinstance(value, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}', value):
+            fail('과월호 기준 월을 확인해주세요.')
+        year, month = map(int, value.split('-'))
+        tagging_period(year, month)
+        return value
+
+    @bp.get('/api/archive')
+    def get_archive():
+        month = archive_month(request.args.get('month', datetime.now(KOREA).strftime('%Y-%m')))
+        draw = db().execute('SELECT d.*,u.username AS created_by_name FROM archive_draws d '
+                            'JOIN users u ON u.id=d.created_by WHERE d.month=?', (month,)).fetchone()
+        assignments = []
+        if draw:
+            for row in db().execute('SELECT * FROM archive_assignments WHERE draw_id=? ORDER BY group_number', (draw['id'],)):
+                assignment = dict(row)
+                assignment['tasks'] = [dict(task) for task in db().execute(
+                    'SELECT t.*,u.username AS completed_by_name FROM archive_tasks t '
+                    'LEFT JOIN users u ON u.id=t.completed_by WHERE t.assignment_id=? ORDER BY t.position', (row['id'],))]
+                assignments.append(assignment)
+        return jsonify(month=month, draw=dict(draw) if draw else None, assignments=assignments,
+                       groups=ARCHIVE_GROUPS, participants=[dict(p) for p in db().execute('SELECT id,name FROM staff WHERE active=1 ORDER BY id')])
+
+    @bp.post('/api/archive/draw')
+    @admin
+    def draw_archive():
+        month = archive_month(payload().get('month'))
+        with db():
+            db().execute('BEGIN IMMEDIATE')
+            if db().execute('SELECT 1 FROM archive_draws WHERE month=?', (month,)).fetchone():
+                fail('이미 추첨한 월입니다. 저장된 결과를 확인해주세요.', 409)
+            people = list(db().execute('SELECT id,name FROM staff WHERE active=1 ORDER BY id'))
+            # shortcut: seven fixed groups require seven staff; add participant selection if staffing changes.
+            if len(people) != len(ARCHIVE_GROUPS):
+                fail('7개 신문 묶음의 추첨에는 재직 근무자 7명이 필요합니다. 인적관리를 확인해주세요.')
+            secrets.SystemRandom().shuffle(people)
+            draw_id = db().execute('INSERT INTO archive_draws(month,created_by,created_at) VALUES (?,?,?)',
+                (month, g.user['id'], datetime.now(timezone.utc).isoformat())).lastrowid
+            for number, (person, papers) in enumerate(zip(people, ARCHIVE_GROUPS), 1):
+                assignment_id = db().execute('INSERT INTO archive_assignments(draw_id,group_number,staff_id,staff_name) '
+                    'VALUES (?,?,?,?)', (draw_id, number, person['id'], person['name'])).lastrowid
+                db().executemany('INSERT INTO archive_tasks(assignment_id,position,newspaper) VALUES (?,?,?)',
+                                 [(assignment_id, index, paper) for index, paper in enumerate(papers)])
+        return jsonify(ok=True), 201
+
+    @bp.put('/api/archive/tasks/<int:task_id>')
+    def complete_archive(task_id):
+        completed = payload().get('completed')
+        if type(completed) is not bool:
+            fail('완료 여부를 확인해주세요.')
+        with db():
+            db().execute('BEGIN IMMEDIATE')
+            task = db().execute('SELECT t.id,a.staff_id FROM archive_tasks t JOIN archive_assignments a '
+                                'ON a.id=t.assignment_id WHERE t.id=?', (task_id,)).fetchone()
+            if not task:
+                fail('신문사 과월호 항목을 찾을 수 없습니다.', 404)
+            if g.user['role'] != 'admin' and task['staff_id'] != g.user['staff_id']:
+                fail('본인이 담당한 신문사만 완료 체크할 수 있습니다.', 403)
+            db().execute('UPDATE archive_tasks SET completed=?,completed_by=?,completed_at=? WHERE id=? AND completed<>?',
+                (completed, g.user['id'] if completed else None,
+                 datetime.now(timezone.utc).isoformat() if completed else None, task_id, completed))
+        return jsonify(ok=True)
+
     @bp.get('/api/issues')
     def get_issues():
         day = request.args.get('day')
@@ -464,7 +554,12 @@ def create_app(config=None):
     @bp.get('/api/users')
     @admin
     def get_users():
-        return jsonify([dict(row) for row in db().execute('SELECT id,username,role,active FROM users ORDER BY id')])
+        return jsonify([dict(row) for row in db().execute('SELECT id,username,role,active,staff_id FROM users ORDER BY id')])
+
+    def linked_staff(value):
+        if value is not None and (type(value) is not int or not db().execute('SELECT 1 FROM staff WHERE id=?', (value,)).fetchone()):
+            fail('연결할 근무자를 확인해주세요.')
+        return value
 
     @bp.post('/api/users')
     @admin
@@ -477,22 +572,27 @@ def create_app(config=None):
         role = data.get('role', 'worker')
         if role not in ('admin', 'worker'):
             fail('권한을 확인해주세요.')
+        person_id = linked_staff(data.get('staff_id'))
         with db():
-            db().execute('INSERT INTO users(username,password_hash,role) VALUES (?,?,?)',
-                         (username, generate_password_hash(password), role))
+            db().execute('INSERT INTO users(username,password_hash,role,staff_id) VALUES (?,?,?,?)',
+                         (username, generate_password_hash(password), role, person_id))
         return jsonify(ok=True), 201
 
     @bp.patch('/api/users/<int:user_id>')
     @admin
     def update_user(user_id):
         data = payload()
-        active = data.get('active')
-        if not isinstance(active, bool) or user_id == g.user['id']:
+        target = db().execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+        if not target:
+            fail('계정을 찾을 수 없습니다.', 404)
+        if not data or set(data) - {'active', 'staff_id'}:
+            fail('계정 변경 항목을 확인해주세요.')
+        active = data.get('active', bool(target['active']))
+        if type(active) is not bool or (user_id == g.user['id'] and not active):
             fail('본인 계정은 비활성화할 수 없습니다.')
+        person_id = linked_staff(data.get('staff_id', target['staff_id']))
         with db():
-            result = db().execute('UPDATE users SET active=?,version=version+1 WHERE id=?', (active, user_id))
-            if result.rowcount == 0:
-                fail('계정을 찾을 수 없습니다.', 404)
+            db().execute('UPDATE users SET active=?,staff_id=?,version=version+1 WHERE id=?', (active, person_id, user_id))
         return jsonify(ok=True)
 
     @bp.post('/api/password')

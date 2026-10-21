@@ -62,11 +62,14 @@ async function main() {
   wednesday.setUTCDate(wednesday.getUTCDate()-(wednesday.getUTCDay()+6)%7+2);
   await call('Page.addScriptToEvaluateOnNewDocument',{source:`{const NativeDate=Date;window.__qaNativeDate=NativeDate;window.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};}`});
   await call('Emulation.setDeviceMetricsOverride',{width:1536,height:1400,deviceScaleFactor:1,mobile:false});
-  await call('Page.navigate', {url:baseURL+'/login'});
   async function waitFor(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error('Timed out: '+expression);}
-  await waitFor('document.readyState === "complete" && !!document.querySelector("input[name=username]")');
-  await evaluate(`document.querySelector('input[name=username]').value=${JSON.stringify(settings.ADMIN_USER)};document.querySelector('input[name=password]').value=${JSON.stringify(settings.ADMIN_PASSWORD)};document.querySelector('form').requestSubmit()`);
-  await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".week-board") && typeof csrfToken !== "undefined" && !!csrfToken');
+  async function loginAs(username,password){
+    await call('Page.navigate',{url:baseURL+'/login'});
+    await waitFor('document.readyState === "complete" && !!document.querySelector("input[name=username]")');
+    await evaluate(`document.querySelector('input[name=username]').value=${JSON.stringify(username)};document.querySelector('input[name=password]').value=${JSON.stringify(password)};document.querySelector('form').requestSubmit()`);
+    await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".week-board") && typeof csrfToken !== "undefined" && !!csrfToken');
+  }
+  await loginAs(settings.ADMIN_USER,settings.ADMIN_PASSWORD);
   await waitFor('document.querySelector("#handoff").children.length===3');
   await evaluate('document.fonts.ready');
   assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),24);
@@ -115,6 +118,60 @@ async function main() {
   await evaluate('document.querySelector("#this-week").click()');
   await waitFor(`document.querySelector('.week-board').dataset.week===${JSON.stringify(week)}`);
 
+  await evaluate('setView("archive")');
+  await waitFor('document.querySelectorAll(".archive-group").length===7');
+  assert.equal(await evaluate('document.querySelector("[data-view=archive] .soon")'),null);
+  const currentArchiveMonth=await evaluate('archiveMonth');
+  await evaluate('document.querySelector("#prev-archive-month").click()');
+  await waitFor('document.querySelectorAll(".archive-group").length===7');
+  assert.notEqual(await evaluate('archiveMonth'),currentArchiveMonth);
+  await evaluate('document.querySelector("#this-archive-month").click()');
+  await waitFor('document.querySelectorAll(".archive-group").length===7');
+  assert.equal(await evaluate('archiveMonth'),currentArchiveMonth);
+  if(local){
+    await evaluate('archiveMonth="2099-01";loadArchive()');
+    const drawn=await evaluate('!!document.querySelector("[data-archive-task]")');
+    if(!drawn){
+      await evaluate('window.__originalConfirm=window.confirm;window.confirm=()=>true;document.querySelector("#draw-archive").click()');
+      await waitFor('document.querySelectorAll("[data-archive-task]").length===20');
+      await evaluate('window.confirm=window.__originalConfirm');
+    }
+    assert.equal(await evaluate('document.querySelector("#draw-archive")'),null);
+    const assignment=await evaluate('api("/archive?month=2099-01").then(d=>d.assignments[0])');
+    const task=assignment.tasks[0];
+    const completed=!!task.completed;
+    await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').click()`);
+    await waitFor(`!!document.querySelector('[data-archive-task="${task.id}"]')&&!document.querySelector('[data-archive-task="${task.id}"]').disabled&&document.querySelector('[data-archive-task="${task.id}"]').checked===${!completed}`);
+    await evaluate('loadArchive()');
+    assert.equal(await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').checked`),!completed);
+    await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').click()`);
+    await waitFor(`!!document.querySelector('[data-archive-task="${task.id}"]')&&!document.querySelector('[data-archive-task="${task.id}"]').disabled&&document.querySelector('[data-archive-task="${task.id}"]').checked===${completed}`);
+    const name='qa_archive_'+Date.now();
+    const password='Browser-test-only-12345';
+    await evaluate('setView("people")');
+    await waitFor('users.length>0');
+    await evaluate(`document.querySelector('#add-user').click();document.querySelector('#user-name').value=${JSON.stringify(name)};document.querySelector('#user-password').value=${JSON.stringify(password)};document.querySelector('#user-form').requestSubmit()`);
+    await waitFor(`!document.querySelector('#user-dialog').open&&users.some(u=>u.username===${JSON.stringify(name)})`);
+    const workerId=await evaluate(`users.find(u=>u.username===${JSON.stringify(name)}).id`);
+    await evaluate(`document.querySelector('[data-link-user="${workerId}"]').value=${JSON.stringify(String(assignment.staff_id))};document.querySelector('[data-link-user="${workerId}"]').dispatchEvent(new Event('change',{bubbles:true}))`);
+    await waitFor(`users.find(u=>u.id===${workerId}).staff_id===${assignment.staff_id}`);
+    await evaluate('api("/logout",{method:"POST"})');
+    await loginAs(name,password);
+    await evaluate('archiveMonth="2099-01";setView("archive")');
+    await waitFor('document.querySelectorAll("[data-archive-task]").length===20');
+    assert.equal(await evaluate('document.querySelectorAll(".my-archive").length'),1);
+    assert.equal(await evaluate('document.querySelectorAll("[data-archive-task]:not(:disabled)").length'),assignment.tasks.length);
+    assert.equal(await evaluate('document.querySelectorAll(".archive-group:not(.my-archive) [data-archive-task]:not(:disabled)").length'),0);
+    await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').click()`);
+    await waitFor(`!!document.querySelector('[data-archive-task="${task.id}"]')&&!document.querySelector('[data-archive-task="${task.id}"]').disabled&&document.querySelector('[data-archive-task="${task.id}"]').checked===${!completed}`);
+    const workerShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+    writeFileSync(join(root,'preview-archive-worker.png'),Buffer.from(workerShot.data,'base64'));
+    await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').click()`);
+    await waitFor(`!!document.querySelector('[data-archive-task="${task.id}"]')&&!document.querySelector('[data-archive-task="${task.id}"]').disabled&&document.querySelector('[data-archive-task="${task.id}"]').checked===${completed}`);
+    await evaluate('api("/logout",{method:"POST"})');
+    await loginAs(settings.ADMIN_USER,settings.ADMIN_PASSWORD);
+  }
+  await evaluate('setView("dashboard")');
   await evaluate('setView("tagging")');
   await waitFor('!!document.querySelector(".tag-mark")');
   assert.equal(await evaluate('document.querySelectorAll(".tagging-table thead th").length'),13);
@@ -182,8 +239,20 @@ async function main() {
   await waitFor('!!document.querySelector(".tag-mark")');
   const tagShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-tagging.png'),Buffer.from(tagShot.data,'base64'));
+  await evaluate('setView("archive")');
+  if(local)await evaluate('archiveMonth="2099-01";loadArchive()');
+  await waitFor('document.querySelectorAll(".archive-group").length===7');
+  for(const width of [390,768,1024,1536]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+    assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`archive overflow at ${width}px`);
+  }
+  const archiveShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  writeFileSync(join(root,'preview-archive.png'),Buffer.from(archiveShot.data,'base64'));
+  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging and archive drawing, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

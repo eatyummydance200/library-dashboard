@@ -61,7 +61,7 @@ function renderIssues(){
 }
 async function loadUsers(){
   users=await api('/users');
-  $('#users-list').innerHTML=users.map(u=>`<div class="user-row"><strong>${esc(u.username)}</strong><span>${u.role==='admin'?'관리자':'근무자'} · ${u.active?'사용 중':'비활성'}</span>${u.id===user.id?'<small>내 계정</small>':`<button class="btn" data-user="${u.id}">${u.active?'비활성화':'활성화'}</button>`}</div>`).join('');
+  $('#users-list').innerHTML=users.map(u=>`<div class="user-row"><strong>${esc(u.username)}</strong><span>${u.role==='admin'?'관리자':'근무자'} · ${u.active?'사용 중':'비활성'}</span>${u.role==='worker'?`<label class="account-link">연결 근무자<select class="select" data-link-user="${u.id}" aria-label="${esc(u.username)} 연결 근무자"><option value="">미연결</option>${staff.map(s=>`<option value="${s.dbid}" ${u.staff_id===s.dbid?'selected':''}>${esc(s.name)}${s.active?'':' (비활성)'}</option>`).join('')}</select></label>`:''}${u.id===user.id?'<small>내 계정</small>':`<button class="btn" data-user="${u.id}">${u.active?'비활성화':'활성화'}</button>`}</div>`).join('');
 }
 function openPerson(id=null){
   editingId=id;
@@ -131,8 +131,8 @@ $('#issue-filter').onchange=renderIssues;
 $('#logout-button').onclick=async()=>{try{await api('/logout',{method:'POST'});location.assign(base+'/login');}catch(error){showError(error);}};
 $('#password-button').onclick=()=>{$('#password-form').reset();$('#password-dialog').showModal();};
 formHandler('#password-form',async()=>{if($('#new-password').value!==$('#confirm-password').value)throw new Error('새 비밀번호가 일치하지 않습니다.');await api('/password',{method:'POST',body:{current:$('#current-password').value,password:$('#new-password').value}});location.assign(base+'/login');});
-$('#add-user').onclick=()=>{$('#user-form').reset();$('#user-dialog').showModal();};
-formHandler('#user-form',async()=>{await api('/users',{method:'POST',body:{username:$('#user-name').value.trim(),password:$('#user-password').value,role:$('#user-role').value}});$('#user-dialog').close();await loadUsers();toast('계정을 만들었어요.');});
+$('#add-user').onclick=()=>{$('#user-form').reset();$('#user-staff').innerHTML='<option value="">미연결</option>'+staff.filter(s=>s.active).map(s=>`<option value="${s.dbid}">${esc(s.name)}</option>`).join('');$('#user-dialog').showModal();};
+formHandler('#user-form',async()=>{await api('/users',{method:'POST',body:{username:$('#user-name').value.trim(),password:$('#user-password').value,role:$('#user-role').value,staff_id:$('#user-staff').value?Number($('#user-staff').value):null}});$('#user-dialog').close();await loadUsers();toast('계정을 만들었어요.');});
 $('#backup-button').onclick=()=>{location.assign(base+'/api/backup');};
 async function initialize(){
   $('#preview-time').value=localInput();
@@ -172,3 +172,11 @@ async function loadTagging(){
 $('#prev-tag-year').onclick=()=>{if(tagYear>2000){tagYear--;loadTagging().catch(showError);}};
 $('#next-tag-year').onclick=()=>{if(tagYear<2100){tagYear++;loadTagging().catch(showError);}};
 $('#this-tag-year').onclick=()=>{tagYear=Number(koreaParts(new Date()).year);loadTagging().catch(showError);};
+
+document.addEventListener('change',async event=>{
+  const select=event.target.closest('[data-link-user]');if(!select)return;
+  select.disabled=true;
+  try{await api('/users/'+select.dataset.linkUser,{method:'PATCH',body:{staff_id:select.value?Number(select.value):null}});await loadUsers();toast('근무자 연결을 저장했습니다. 해당 계정은 다시 로그인해주세요.');}
+  catch(error){const previous=users.find(u=>u.id===Number(select.dataset.linkUser));select.value=previous?.staff_id||'';showError(error);}
+  finally{select.disabled=false;}
+});
