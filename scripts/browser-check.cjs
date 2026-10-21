@@ -284,6 +284,10 @@ async function main() {
     const dutyLayout=await evaluate('(()=>{const a=document.querySelector(".dashboard-duty-layout>section").getBoundingClientRect(),b=document.querySelector(".duty-card").getBoundingClientRect();return {right:a.right,top:a.top,bottom:a.bottom,dutyLeft:b.left,dutyTop:b.top};})()');
     assert.equal(width>1200?dutyLayout.dutyLeft>=dutyLayout.right:dutyLayout.dutyTop>=dutyLayout.bottom,true,`duty layout at ${width}px`);
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`dashboard overflow at ${width}px`);
+    const headings=await evaluate('[...document.querySelectorAll("#dashboard h2")].map(e=>({card:!!e.closest(".card"),head:e.parentElement.classList.contains("card-head"),size:getComputedStyle(e).fontSize,padding:getComputedStyle(e.parentElement).padding}))');
+    assert.equal(headings.length,3);
+    assert.equal(headings.every(e=>e.card&&e.head&&e.size===headings[0].size&&e.padding===headings[0].padding),true,`dashboard headings at ${width}px`);
+
     await evaluate('setView("schedule");scrollTo(0,0)');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".time-end")).fontSize===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontSize && getComputedStyle(document.querySelector(".time-end")).fontWeight===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontWeight'),true);
