@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from app import KOREA, create_app
+from spring_app import KOREA, create_app, stop_apps
 
 BASE = '/libaryDashBoard'
 SEED = {'staff': [{'id': 0, 'name': '테스트 가'}, {'id': 1, 'name': '테스트 나'}],
@@ -32,12 +32,14 @@ class ApplicationTests(unittest.TestCase):
         self.monday = today - timedelta(days=today.weekday())
 
     def tearDown(self):
+        stop_apps()
         self.environment.stop()
         self.directory.cleanup()
 
     def login(self, client=None, username='testadmin', password='test-password-123'):
         client = client or self.client
         page = client.get(BASE + '/login')
+        self.assertIn('action="' + BASE + '/login"', page.text)
         token = re.search(r'name="csrf" value="([^"]+)"', page.text)[1]
         response = client.post(BASE + '/login', data={'csrf': token, 'username': username, 'password': password})
         return response
@@ -489,6 +491,27 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(upgraded.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(upgraded.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
+
+    def test_legacy_password_cookie_rotation_and_json_size_limit(self):
+        import hashlib
+        password = 'test-password-123'
+        encoded = 'scrypt:32768:8:1$python-salt$' + hashlib.scrypt(
+            password.encode(), salt=b'python-salt', n=32768, r=8, p=1,
+            dklen=64, maxmem=64*1024*1024).hex()
+        with sqlite3.connect(self.database) as connection:
+            connection.execute('UPDATE users SET password_hash=? WHERE id=1', (encoded,))
+        page = self.client.get(BASE + '/login')
+        cookie = page.headers['Set-Cookie']
+        self.assertIn('HttpOnly', cookie)
+        self.assertIn('Path=' + BASE, cookie)
+        self.assertIn('SameSite=Lax', cookie)
+        response = self.login()
+        self.assertEqual(response.status_code, 302)
+        self.assertNotEqual(response.headers['Set-Cookie'].split(';')[0], cookie.split(';')[0])
+        self.assertEqual(self.write('/issues', {'category': '인계', 'title': '큰 요청', 'body': 'x'*66000}).status_code, 413)
+        self.assertEqual(self.write('/shifts', {'staff_id': 1, 'day': self.monday.isoformat(), 'start': 540, 'end': 600}).status_code, 400)
+
 
 if __name__ == '__main__':
     unittest.main()

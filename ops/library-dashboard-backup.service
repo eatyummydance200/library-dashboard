@@ -5,4 +5,4 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/docker exec sd-library-dashboard python /app/scripts/backup.py
+ExecStart=/usr/bin/docker exec sd-library-dashboard java -jar /app/app.jar --backup

@@ -4,13 +4,13 @@
 
 ## 선택한 구조
 
-기존 HTML/CSS/JavaScript 화면과 Python Flask API, SQLite를 하나의 Docker 컨테이너로 운영한다. Flask의 운영용 서버는 Gunicorn을 사용한다. 현재 근무자 7명의 시간표·연락처·인계 관리 규모를 기준으로 한다.
+기존 HTML/CSS/JavaScript 화면과 Java Spring Boot API, SQLite를 하나의 Docker 컨테이너로 운영한다. 내장 Tomcat과 Java 21을 사용한다. 현재 근무자 7명의 시간표·연락처·인계 관리 규모를 기준으로 한다.
 
 ```mermaid
 flowchart LR
   Browser["사용자 · HTTPS"] --> Funnel["기존 Tailscale Funnel"]
   Funnel -->|"/ → 8088"| Desk["기존 Server Desk"]
-  Funnel -->|"/libaryDashBoard → 8090"| App["근무 대시보드 컨테이너\nFlask + Gunicorn\nHTML / CSS / JavaScript"]
+  Funnel -->|"/libaryDashBoard → 8090"| App["근무 대시보드 컨테이너\nSpring Boot + Tomcat\nHTML / CSS / JavaScript"]
   App --> DB[("SQLite\n영구 볼륨 /app/data")]
   Desk -. "이미지 배포 · 상태 확인" .-> App
 ```
@@ -18,9 +18,9 @@ flowchart LR
 | 구성 | 선택 | 관리 방법 |
 | --- | --- | --- |
 | 화면 | 현재 시안의 HTML/CSS/JavaScript | 화면 코드를 재사용하고 API로 데이터를 읽고 저장 |
-| API | Python + Flask | 기능별 라우트로 시간표·인적관리·이슈 처리 |
-| 실행 | Gunicorn, 초기 1 worker / 2 threads | 컨테이너 안에서 화면과 API를 함께 제공 |
-| DB | SQLite, Python 표준 sqlite3 사용 | 로컬 Docker 볼륨의 DB 파일 하나 |
+| API | Java 21 + Spring Boot | 기능별 라우트로 시간표·인적관리·이슈 처리 |
+| 실행 | 내장 Tomcat, 최대 20 요청 스레드 | 컨테이너 안에서 화면과 API를 함께 제공 |
+| DB | SQLite, SQLite JDBC 사용 | 로컬 Docker 볼륨의 DB 파일 하나 |
 | HTTPS·경로 분기 | 기존 Tailscale Funnel | 인증서와 두 서비스의 접속 경로 담당 |
 | 배포 | GHCR 이미지 → 기존 Server Desk | 버전별 이미지로 수동 배포부터 시작 |
 
@@ -44,7 +44,7 @@ https://eatyummydance200.tail72d30b.ts.net/libaryDashBoard
 | `/libaryDashBoard/api/...` | 근무 대시보드 API |
 | `/libaryDashBoard/healthz` | 비밀값 없는 정상 여부 응답 |
 
-Funnel은 하위 경로 프록시에서 mount 경로를 제거한다. 대상 URL에 동일한 경로를 포함해 복원하고, Flask Blueprint도 같은 경로에 둔다. 예: 외부 `/libaryDashBoard/api/staff` → Funnel에서 `/api/staff` → 대상 URL 경로와 합쳐 내부 `/libaryDashBoard/api/staff`.
+Funnel은 하위 경로 프록시에서 mount 경로를 제거한다. 대상 URL에 동일한 경로를 포함해 복원하고, Spring servlet context-path도 같은 경로에 둔다. 예: 외부 `/libaryDashBoard/api/staff` → Funnel에서 `/api/staff` → 대상 URL 경로와 합쳐 내부 `/libaryDashBoard/api/staff`.
 
 아래 설정으로 새 경로를 추가한다. 먼저 현재 Funnel 설정을 보관하고, 기존 루트 연결을 유지한다.
 
@@ -70,15 +70,15 @@ DB는 `/app/data/library.sqlite3`. SQLite 외래키, WAL, 연결별 busy timeout
 - 시간은 `09:00=540`, `16:30=990`처럼 자정부터의 정수 분으로 저장한다. 시작 포함·종료 제외 구간으로 계산하고, 같은 사람의 근무 시간이 겹치는 입력을 거절한다.
 - 주간 시간표는 실제 날짜별로 저장한다. 이전 주 복사 기능으로 반복 입력을 줄이고, 이번 주 수정이 과거 주에 영향을 주지 않게 한다.
 - 근무자 삭제 대신 재직 상태를 바꿔 과거 근무 기록을 유지한다.
-- 주간 근무·데스크 시간은 근무 구간에서 계산한다. 오픈은 해당 날짜 09:00 근무자, 마감은 21:00까지 근무한 사람을 날짜별 한 번씩 센다.
+- 주간 근무·데스크 시간은 근무 구간에서 계산한다. 오픈은 해당 날짜 09:00 근무자, 마감은 날짜별 마지막 종료 시각(최소 21:00)에 근무를 마친 사람을 한 번씩 센다.
 - 이전·현재·다음은 모든 교대 시각을 기준으로 인접 근무 구간을 보여준다. 근무가 없는 시간과 주말도 처리한다.
 - 날짜와 주간 경계는 `Asia/Seoul`, 기록의 생성·수정 시각은 UTC로 저장해 화면에서 한국 시간으로 표시한다.
 - 기존 시안의 우측 통계는 첨부 이미지의 집계값이다. 서비스에서는 구간별 재계산 값과 원본을 대조한 뒤 초기 데이터를 확정한다.
-- 과월호·태깅은 현재처럼 빈 탭으로 유지한다.
+- 과월호는 월별 추첨·수동 배정과 담당자 완료 체크를 제공하고, 태깅은 연도별 월간 완료 표로 관리한다.
 
 ## 로그인과 접근
 
-관리자와 근무자 두 권한으로 시작한다. 관리자는 시간표·인적정보·계정을 수정하고, 근무자는 시간표·연락처를 조회하고 이슈를 작성·완료할 수 있도록 설계한다. 최종 권한 범위는 운영 시작 전에 확정한다.
+관리자와 근무자 두 권한으로 시작한다. 관리자는 시간표·인적정보·계정을 수정하고, 근무자는 시간표·연락처를 조회하고 이슈를 작성·완료할 수 있도록 설계한다. 과월호 완료 체크는 연결된 본인 담당 항목만 가능하며, 관리자는 전체 항목을 처리할 수 있다.
 
 모든 업무 화면과 API는 로그인이 필요하다. 비밀번호는 검증된 라이브러리의 해시 기능을 사용하고, 로그인 시도 제한과 쓰기 요청의 CSRF 검증을 적용한다. 입력 검증, SQL 파라미터 바인딩, 출력 이스케이프를 유지한다.
 
@@ -128,5 +128,5 @@ DB는 `/app/data/library.sqlite3`. SQLite 외래키, WAL, 연결별 busy timeout
 - [Tailscale 공식 프록시 구현: mount 접두 경로 제거](https://github.com/tailscale/tailscale/blob/main/ipn/ipnlocal/serve.go)
 - [SQLite의 적합한 사용 범위와 동시 쓰기 제약](https://www.sqlite.org/whentouse.html)
 - [SQLite의 일관된 백업 API](https://www.sqlite.org/backup.html)
-- [Flask 운영 배포와 Gunicorn](https://flask.palletsprojects.com/en/stable/deploying/gunicorn/)
+- [Spring Boot 시스템 요구사항](https://docs.spring.io/spring-boot/3.5/system-requirements.html)
 - 현재 서버의 `server-desk/README.md`, `AppSpec.java`, `Deployments.java` 및 조회한 Funnel 설정.

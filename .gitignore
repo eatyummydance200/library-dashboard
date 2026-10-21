@@ -10,3 +10,5 @@ __pycache__/
 /index.html
 /check.cjs
 /static/fonts/*.woff2
+
+/target/

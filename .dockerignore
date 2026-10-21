@@ -8,3 +8,5 @@ __pycache__
 preview*.png
 .deployment-state.json
 static/fonts/*.woff2
+
+target

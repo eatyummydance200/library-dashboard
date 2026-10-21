@@ -1,6 +1,6 @@
 # 인천대학교 연속간행물실 근무 대시보드
 
-Flask + Gunicorn + SQLite로 실행하는 근무 관리 서비스. 화면과 API를 한 컨테이너에서 제공하며 데이터는 Docker 볼륨에 보관한다.
+Java 21 + Spring Boot 3.5.16 + SQLite로 실행하는 근무 관리 서비스. 화면과 API를 한 컨테이너에서 제공하며 데이터는 Docker 볼륨에 보관한다.
 
 - 30분 눈금의 스크롤 없는 주간 시간표, 현재 구간 표시, 시간표 탭의 주당 근무 시간
 - 이전·현재·다음 근무자의 데스크·대기 구분, 다른 주 시간표 복사
@@ -11,7 +11,7 @@ Flask + Gunicorn + SQLite로 실행하는 근무 관리 서비스. 화면과 API
 
 ## 실행
 
-Python 3.12, `pip install -r requirements.txt`.
+Java 21과 Maven이 필요하다. 글꼴 다운로드·회귀 테스트·배포 보조 도구에는 개발/CI 환경의 Python 3만 사용하며, 운영 컨테이너에는 Python이 없다.
 
 첫 개발 실행 전 `python scripts/fetch-font.py`로 공식 Pretendard 1.3.9 글꼴을 준비한다. Docker 빌드와 로컬 실행 도구에서도 자동 수행하며 SHA-256을 검사한다. 운영 중에는 글꼴도 자체 서버에서 제공한다. 글꼴 라이선스는 `static/fonts/OFL.txt`에 포함한다.
 
@@ -19,7 +19,6 @@ Python 3.12, `pip install -r requirements.txt`.
 
 | 이름 | 용도 |
 | --- | --- |
-| `SECRET_KEY` | 32자 이상의 무작위 세션 서명 키. 재시작·배포 시 동일하게 유지 |
 | `ADMIN_USER` | 첫 실행 때 생성할 관리자 아이디 |
 | `ADMIN_PASSWORD` | 초기 비밀번호, 10자 이상. 저장소나 이미지에 넣지 않음 |
 | `DATABASE` | 기본 `/app/data/library.sqlite3` |
@@ -28,7 +27,8 @@ Python 3.12, `pip install -r requirements.txt`.
 | `INITIAL_SCHEDULE_JSON` | 선택 사항. 첫 실행 때만 가져올 근무자·시간표 JSON |
 
 ```bash
-gunicorn --bind 127.0.0.1:8000 --workers 1 --threads 2 'app:create_app()'
+mvn -B verify
+java -Xms32m -Xmx256m -jar target/app.jar
 python -m unittest discover -s tests -v
 ```
 
@@ -72,10 +72,10 @@ sudo tailscale funnel --bg --https=443 \
 
 ## 백업과 복구
 
-관리자 화면에서 DB 백업을 다운로드할 수 있다. 서버에서는 다음 명령이 SQLite backup API로 일관된 스냅샷을 만들고 7일 이전 스냅샷을 정리한다.
+관리자 화면에서 DB 백업을 다운로드할 수 있다. 서버에서는 다음 명령이 SQLite `VACUUM INTO`로 일관된 스냅샷을 만들고 7일 이전 스냅샷을 정리한다.
 
 ```bash
-docker exec sd-library-dashboard python /app/scripts/backup.py
+docker exec sd-library-dashboard java -jar /app/app.jar --backup
 ```
 
 설치용 systemd service/timer는 `ops/`에 있다. 매일 한국 시간 04시에 실행한다. 같은 볼륨 안의 백업은 디스크 고장에 대비하지 못하므로 다운로드한 백업을 별도 기기에 보관한다.
@@ -121,3 +121,11 @@ DB 버전 4는 근무 종료 시각 제약을 22시까지 넓힌다. 기존 근�
 대시보드의 당직 카드에서 담당쌤과 내선번호를 공유한다. 관리자가 수정하고 모든 로그인 근무자가 조회하며, 정보는 서버에 저장되어 재시작 후에도 유지된다. 날짜별 이력 없이 현재 연락처를 관리한다. 데이터베이스 v5는 기존 데이터를 유지하고 당직 연락처 테이블만 추가한다. 이전 이미지로 돌아갈 때는 호환되는 백업을 함께 복원해야 한다.
 
 근무 현황은 현재 한국 시각을 기준으로 조회하며 날짜 옆에 시:분을 표시하고 1분마다 갱신한다. 조회 시각 조절과 상단 학기 문구는 제거했다. 시간표 근무 블록에는 이름만 표시하고 역할은 색상과 범례로 구분한다. 근무 편집 창과 접근성 레이블에는 구분·시간 정보를 유지한다.
+
+## Spring Boot 이관
+
+서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/libaryDashBoard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 버전 5 그대로 사용하며 기존 행·비밀번호 해시를 변경하지 않는다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
+
+운영 JVM은 힙 최대 256MB, 메타스페이스 최대 128MB로 제한한다. 전체 프로세스 메모리는 힙보다 크므로 Docker 메모리 사용량도 확인한다. CI는 Java 단위 테스트와 실제 Spring HTTP 프로세스를 대상으로 하는 기존 기능 회귀 테스트를 실행한다. `python3 scripts/run-local.py`는 비공개 개발 환경과 `data/local.sqlite3`로 8091 포트에 Java 서버를 실행한다.
+
+백업 타이머는 `ops/library-dashboard-backup.service`의 Java 명령을 사용한다. SQLite `VACUUM INTO`로 WAL에 커밋된 데이터를 포함하는 일관된 스냅샷을 만들고 7일간 보관한다. 이관 전 이미지는 `ghcr.io/eatyummydance200/library-dashboard@sha256:54ab30741394e39d2ebb0e019ffcea5fde1a0e6bbdb3256f7cafcb6a55a0395a`이며 DB 버전과 비밀번호 형식을 유지하므로 이미지 롤백이 가능하다. 롤백 시 백업 서비스 명령도 해당 런타임에 맞춘다.
