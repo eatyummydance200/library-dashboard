@@ -101,6 +101,15 @@ async function main() {
   assert.equal(await evaluate('getComputedStyle(document.body).fontFamily.includes("Pretendard")'),true);
   assert.equal(await evaluate('parseFloat(getComputedStyle(document.querySelector(".time-tick")).fontSize)>=16'),true);
 
+  assert.equal(await evaluate('document.querySelector("#preview-time,#live-time,.clock-control,.semester,#status-mode")'),null);
+  assert.equal(await evaluate('document.querySelector("#shift-date").textContent.endsWith("수요일 14:45")'),true);
+  assert.equal(await evaluate('document.querySelector(".worker small,.worker time")'),null);
+  assert.equal(await evaluate('[...document.querySelectorAll(".worker")].every(e=>e.textContent===staff.find(s=>s.dbid===rawShifts.find(r=>r.id===Number(e.dataset.shift)).staff_id).name)'),true);
+  for(const [stamp,suffix] of [[wednesday.getTime()+60000,'수요일 14:46'],[new Date(wednesday).setUTCHours(14,59,0,0),'수요일 23:59'],[new Date(wednesday).setUTCHours(15,0,0,0),'목요일 00:00']]){
+    await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${stamp}]));}static now(){return ${stamp};}};loadStatus()`);
+    assert.equal(await evaluate('document.querySelector("#shift-date").textContent.endsWith('+JSON.stringify(suffix)+')'),true);
+  }
+  await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};loadStatus()`);
   for(const [hour,minute,expected] of [[8,59,null],[9,0,'540'],[9,29,'540'],[9,30,'570'],[20,59,'1230'],[21,0,'1260'],[21,30,'1290'],[21,59,'1290'],[22,0,null]]){
     const stamp=new Date(wednesday);stamp.setUTCHours(hour-9,minute,0,0);
     await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${stamp.getTime()}]));}static now(){return ${stamp.getTime()};}};renderSchedule()`);
@@ -324,7 +333,7 @@ async function main() {
   const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 26 half-hour ticks through 22:00, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard with status, shared duty contact, and issues, taller calendar beside compact stats and weekly shift-change issues, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 26 half-hour ticks through 22:00, name-only merged shift placement and live Korean date/time, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard with status, shared duty contact, and issues, taller calendar beside compact stats and weekly shift-change issues, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

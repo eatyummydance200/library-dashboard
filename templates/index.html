@@ -17,10 +17,10 @@
   <div class="profile"><button id="password-button" class="text-btn" title="비밀번호 변경" aria-label="비밀번호 변경">비밀번호</button><button id="logout-button" class="text-btn">로그아웃</button></div><div class="profile profile-user"><span class="avatar">관</span><div><strong id="current-user">로그인 확인 중</strong><small>연속간행물실</small></div><span style="margin-left:auto;color:#9ca89f" data-icon="chevron"></span></div>
 </aside>
 <main class="main">
-  <header class="topbar"><div class="breadcrumb"><span data-icon="home"></span><span>인천대학교 · 연속간행물실</span><span style="color:#bac5d7">/</span><strong id="breadcrumb">대시보드</strong></div><div class="top-actions"><span class="semester">2026학년도 2학기</span><span class="live-label"><i></i>연결됨</span><button class="avatar account-avatar" aria-label="내 계정 메뉴">관</button></div></header>
-  <section class="intro"><div><h1 id="page-title">근무 대시보드</h1></div><div class="clock-control"><label for="preview-time">근무 조회 시각 · 한국 시간</label><input id="preview-time" type="datetime-local"  aria-label="근무 현황을 확인할 기준 시각"><button class="btn" id="live-time">지금</button></div></section>
+  <header class="topbar"><div class="breadcrumb"><span data-icon="home"></span><span>인천대학교 · 연속간행물실</span><span style="color:#bac5d7">/</span><strong id="breadcrumb">대시보드</strong></div><div class="top-actions"><span class="live-label"><i></i>연결됨</span><button class="avatar account-avatar" aria-label="내 계정 메뉴">관</button></div></header>
+  <section class="intro"><div><h1 id="page-title">근무 대시보드</h1></div></section>
   <section id="dashboard" class="view" aria-label="근무 대시보드">
-    <div class="dashboard-duty-layout"><section aria-label="근무 현황"><div class="section-label"><h2>근무 현황</h2><span id="shift-date"></span><span id="status-mode" class="status-mode">실시간</span></div>
+    <div class="dashboard-duty-layout"><section aria-label="근무 현황"><div class="section-label"><h2>근무 현황</h2><span id="shift-date"></span></div>
     <div class="handoff" id="handoff" aria-live="polite"></div></section>
     <section class="card duty-card" aria-label="당직"><div class="card-head"><h2>당직</h2><button class="btn admin-only" id="edit-duty" hidden>수정</button></div><dl class="duty-contact" aria-live="polite"><div><dt>담당쌤</dt><dd id="duty-teacher">미등록</dd></div><div><dt>내선번호</dt><dd id="duty-extension">미등록</dd></div></dl></section></div>
     <section class="card issues-card"><div class="card-head"><h2>이슈 & 인계 <small id="issue-count">2</small></h2><button class="text-btn" data-view="issues">전체 보기 <span data-icon="chevron"></span></button></div><div class="issue-preview" id="issue-preview"></div></section>

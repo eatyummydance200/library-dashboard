@@ -39,11 +39,10 @@ function renderPeople(){
   $('#people-rows').innerHTML=staff.map((s,i)=>`<tr><td><div class="staff-name"><span class="avatar av-${i%7}">${esc(s.name.slice(0,1))}</span>${esc(s.name)}${s.active?'':' <small>비활성</small>'}</div></td><td>${esc(s.phone||'미등록')}</td><td>연속간행물실</td><td>${user?.role==='admin'?`<button class="btn" data-edit="${s.id}">수정</button>`:'조회 전용'}</td></tr>`).join('');
 }
 async function loadStatus(){
-  const at=$('#preview-time').value;
-  const data=await api('/status?at='+encodeURIComponent(at+'+09:00'));
-  const p=snapshot(preview()||new Date());
-  $('#shift-date').textContent=`${p.month}월 ${p.dayNumber}일 ${['월','화','수','목','금','토','일'][p.day]}요일`;
-  $('#status-mode').textContent=manualTime?'선택 시각 조회':'실시간';
+  const at=new Date();
+  const data=await api('/status?at='+encodeURIComponent(at.toISOString()));
+  const p=snapshot(at),clock=koreaParts(at);
+  $('#shift-date').textContent=`${p.month}월 ${p.dayNumber}일 ${['월','화','수','목','금','토','일'][p.day]}요일 ${clock.hour}:${clock.minute}`;
   const when=value=>value?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(value)):'예정 없음';
   const group=(entries,desk)=>{
     const assigned=entries.filter(entry=>(entry.role==='desk')===desk);
@@ -118,8 +117,6 @@ document.addEventListener('click',async event=>{
     if(event.target.closest('#copy-week')){$('#copy-source').value=isoDay(new Date(weekDates()[0].getTime()-7*86400000));$('#copy-target').value=isoDay(weekDates()[0]);$('#copy-dialog').showModal();}
   }catch(error){showError(error);}
 });
-$('#preview-time').onchange=async()=>{if(!preview())return;manualTime=true;weekOffset=0;try{await loadWeek();await loadStatus();}catch(error){showError(error);}};
-$('#live-time').onclick=async()=>{manualTime=false;$('#preview-time').value=localInput();weekOffset=0;try{await loadWeek();await loadStatus();}catch(error){showError(error);}};
 $('#add-person').onclick=()=>openPerson();
 formHandler('#contact-form',async()=>{
   const name=$('#contact-name').value.trim(),phone=$('#contact-phone').value.trim(),active=$('#contact-active').value==='true';
@@ -145,7 +142,6 @@ $('#add-user').onclick=()=>{$('#user-form').reset();$('#user-staff').innerHTML='
 formHandler('#user-form',async()=>{await api('/users',{method:'POST',body:{username:$('#user-name').value.trim(),password:$('#user-password').value,role:$('#user-role').value,staff_id:$('#user-staff').value?Number($('#user-staff').value):null}});$('#user-dialog').close();await loadUsers();toast('계정을 만들었어요.');});
 $('#backup-button').onclick=()=>{location.assign(base+'/api/backup');};
 async function initialize(){
-  $('#preview-time').value=localInput();
   const data=await api('/me');user=data.user;csrfToken=data.csrf;
   $('#current-user').textContent=user.username+' · '+(user.role==='admin'?'관리자':'근무자');
   await loadWeek();await Promise.all([loadIssues(),loadStatus(),loadDuty()]);renderIcons();applyPermissions();
@@ -153,8 +149,7 @@ async function initialize(){
 initialize().catch(error=>{$('#load-error').textContent='데이터를 불러오지 못했습니다. '+error.message+' 새로고침해주세요.';$('#load-error').hidden=false;});
 async function refreshCurrentView(){
   if(!user||document.hidden)return;
-  if(manualTime){renderSchedule();return;}
-  try{$('#preview-time').value=localInput();await loadWeek();await Promise.all([loadStatus(),loadIssues(),loadDuty()]);}catch(error){showError(error);}
+  try{await loadWeek();await Promise.all([loadStatus(),loadIssues(),loadDuty()]);}catch(error){showError(error);}
 }
 setInterval(refreshCurrentView,60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCurrentView();});
