@@ -474,6 +474,13 @@ def create_app(config=None):
         return jsonify(month=month, draw=dict(draw) if draw else None, assignments=assignments,
                        groups=ARCHIVE_GROUPS, participants=[dict(p) for p in db().execute('SELECT id,name FROM staff WHERE active=1 ORDER BY id')])
 
+    def add_archive_assignments(draw_id, people):
+        for number, (person, papers) in enumerate(zip(people, ARCHIVE_GROUPS), 1):
+            assignment_id = db().execute('INSERT INTO archive_assignments(draw_id,group_number,staff_id,staff_name) '
+                'VALUES (?,?,?,?)', (draw_id, number, person['id'], person['name'])).lastrowid
+            db().executemany('INSERT INTO archive_tasks(assignment_id,position,newspaper) VALUES (?,?,?)',
+                             [(assignment_id, index, paper) for index, paper in enumerate(papers)])
+
     @bp.post('/api/archive/draw')
     @admin
     def draw_archive():
@@ -489,12 +496,55 @@ def create_app(config=None):
             secrets.SystemRandom().shuffle(people)
             draw_id = db().execute('INSERT INTO archive_draws(month,created_by,created_at) VALUES (?,?,?)',
                 (month, g.user['id'], datetime.now(timezone.utc).isoformat())).lastrowid
-            for number, (person, papers) in enumerate(zip(people, ARCHIVE_GROUPS), 1):
-                assignment_id = db().execute('INSERT INTO archive_assignments(draw_id,group_number,staff_id,staff_name) '
-                    'VALUES (?,?,?,?)', (draw_id, number, person['id'], person['name'])).lastrowid
-                db().executemany('INSERT INTO archive_tasks(assignment_id,position,newspaper) VALUES (?,?,?)',
-                                 [(assignment_id, index, paper) for index, paper in enumerate(papers)])
+            add_archive_assignments(draw_id, people)
         return jsonify(ok=True), 201
+
+    @bp.put('/api/archive/assignments')
+    @admin
+    def manual_archive():
+        data = payload()
+        month = archive_month(data.get('month'))
+        ids, expected = data.get('staff_ids'), data.get('expected')
+        if (not isinstance(ids, list) or len(ids) != len(ARCHIVE_GROUPS)
+                or any(type(value) is not int for value in ids) or len(set(ids)) != len(ids)):
+            fail('7개 묶음의 담당자를 중복 없이 선택해주세요.')
+        if expected is not None and (not isinstance(expected, list) or len(expected) != len(ARCHIVE_GROUPS)
+                or any(type(value) is not int for value in expected)):
+            fail('기존 담당 배정을 확인해주세요.')
+        with db():
+            db().execute('BEGIN IMMEDIATE')
+            draw = db().execute('SELECT * FROM archive_draws WHERE month=?', (month,)).fetchone()
+            existing = list(db().execute('SELECT * FROM archive_assignments WHERE draw_id=? ORDER BY group_number',
+                                        (draw['id'],))) if draw else []
+            current = [a['staff_id'] for a in existing] if existing else None
+            if expected != current:
+                fail('다른 관리자가 담당 배정을 변경했습니다. 새로고침 후 다시 확인해주세요.', 409)
+            people = []
+            for index, person_id in enumerate(ids):
+                person = db().execute('SELECT id,name,active FROM staff WHERE id=?', (person_id,)).fetchone()
+                unchanged = bool(existing) and existing[index]['staff_id'] == person_id
+                if not person or (not person['active'] and not unchanged):
+                    fail('재직 중인 근무자를 선택해주세요. 기존 비활성 담당자는 그대로 유지할 수 있습니다.')
+                people.append({'id': person_id, 'name': existing[index]['staff_name'] if unchanged else person['name']})
+            if not draw:
+                draw_id = db().execute('INSERT INTO archive_draws(month,created_by,created_at) VALUES (?,?,?)',
+                    (month, g.user['id'], datetime.now(timezone.utc).isoformat())).lastrowid
+                add_archive_assignments(draw_id, people)
+            elif ids != current:
+                draw_id = draw['id']
+                tasks = list(db().execute('SELECT t.* FROM archive_tasks t JOIN archive_assignments a '
+                                         'ON a.id=t.assignment_id WHERE a.draw_id=?', (draw_id,)))
+                # SQLite checks uniqueness per row; replace atomically with the same IDs to allow swaps.
+                db().execute('DELETE FROM archive_tasks WHERE assignment_id IN '
+                             '(SELECT id FROM archive_assignments WHERE draw_id=?)', (draw_id,))
+                db().execute('DELETE FROM archive_assignments WHERE draw_id=?', (draw_id,))
+                db().executemany('INSERT INTO archive_assignments(id,draw_id,group_number,staff_id,staff_name) '
+                                 'VALUES (?,?,?,?,?)',
+                                 [(old['id'], draw_id, old['group_number'], person['id'], person['name'])
+                                  for old, person in zip(existing, people)])
+                db().executemany('INSERT INTO archive_tasks(id,assignment_id,position,newspaper,completed,completed_by,completed_at) '
+                                 'VALUES (?,?,?,?,?,?,?)', [tuple(task) for task in tasks])
+        return jsonify(ok=True)
 
     @bp.put('/api/archive/tasks/<int:task_id>')
     def complete_archive(task_id):

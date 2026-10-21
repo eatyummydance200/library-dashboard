@@ -234,6 +234,71 @@ class ApplicationTests(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(self.app.db().execute('SELECT count(*) FROM archive_draws').fetchone()[0], 2)
 
+    def test_manual_archive_creation_and_swap_preserve_completed_tasks(self):
+        self.login()
+        self.archive_roster()
+        ids = list(range(1, 8))
+        body = {'month': '2026-10', 'staff_ids': ids, 'expected': None}
+        self.assertEqual(self.client.put(BASE + '/api/archive/assignments', json=body).status_code, 403)
+        self.assertEqual(self.write('/archive/assignments', body, 'put').status_code, 200)
+        before = self.client.get(BASE + '/api/archive?month=2026-10').json
+        task_id = before['assignments'][0]['tasks'][0]['id']
+        self.write('/archive/tasks/' + str(task_id), {'completed': True}, 'put')
+        before = self.client.get(BASE + '/api/archive?month=2026-10').json
+        self.write('/archive/draw', {'month': '2026-11'})
+        november = self.client.get(BASE + '/api/archive?month=2026-11').json
+        changed = [2, 1, 3, 4, 5, 6, 7]
+        update = {**body, 'staff_ids': changed, 'expected': ids}
+        self.assertEqual(self.write('/archive/assignments', update, 'put').status_code, 200)
+        after = self.client.get(BASE + '/api/archive?month=2026-10').json
+        self.assertEqual([a['staff_id'] for a in after['assignments']], changed)
+        self.assertEqual([a['id'] for a in after['assignments']], [a['id'] for a in before['assignments']])
+        self.assertEqual([a['tasks'] for a in after['assignments']], [a['tasks'] for a in before['assignments']])
+        self.assertEqual(after['draw'], before['draw'])
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-11').json, november)
+        self.assertEqual(self.write('/archive/assignments', update, 'put').status_code, 409)
+        self.assertEqual(self.write('/archive/draw', {'month': '2026-10'}).status_code, 409)
+        self.assertEqual(self.write('/archive/assignments', {**body, 'staff_ids': changed, 'expected': changed}, 'put').status_code, 200)
+        self.write('/users', {'username': 'worker', 'password': 'worker-password-123', 'role': 'worker', 'staff_id': 1})
+        worker = self.app.test_client()
+        self.login(worker, 'worker', 'worker-password-123')
+        self.assertEqual(self.write('/archive/assignments', update, 'put', worker).status_code, 403)
+        self.assertEqual(self.write('/archive/tasks/' + str(task_id), {'completed': False}, 'put', worker).status_code, 403)
+        new_task = after['assignments'][1]['tasks'][0]['id']
+        self.assertEqual(self.write('/archive/tasks/' + str(new_task), {'completed': True}, 'put', worker).status_code, 200)
+        with self.app.app_context():
+            self.assertEqual(self.app.db().execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_manual_archive_validation_and_inactive_history(self):
+        self.login()
+        self.archive_roster()
+        ids = list(range(1, 8))
+        body = {'month': '2026-10', 'staff_ids': ids, 'expected': None}
+        for invalid in [None, [], [1]*7, [True,2,3,4,5,6,7], ['1',2,3,4,5,6,7], [1,2,3,4,5,6,999]]:
+            self.assertEqual(self.write('/archive/assignments', {**body, 'staff_ids': invalid}, 'put').status_code, 400)
+        self.assertEqual(self.write('/archive/assignments', {**body, 'month': 'wrong'}, 'put').status_code, 400)
+        self.assertEqual(self.write('/archive/assignments', {**body, 'expected': [1]}, 'put').status_code, 400)
+        self.assertIsNone(self.client.get(BASE + '/api/archive?month=2026-10').json['draw'])
+        self.write('/archive/assignments', body, 'put')
+        self.write('/staff/1', {'name': '과거 이름 변경', 'phone': '', 'active': False}, 'put')
+        self.assertEqual(self.write('/archive/assignments', {**body, 'expected': ids}, 'put').status_code, 200)
+        self.assertEqual(self.write('/archive/assignments', {**body, 'expected': ids, 'staff_ids': [2,1,3,4,5,6,7]}, 'put').status_code, 400)
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-10').json['assignments'][0]['staff_name'], '테스트 가')
+
+    def test_manual_archive_failed_swap_rolls_back_all_records(self):
+        self.login()
+        self.archive_roster()
+        ids = list(range(1, 8))
+        self.write('/archive/assignments', {'month': '2026-10', 'staff_ids': ids}, 'put')
+        before = self.client.get(BASE + '/api/archive?month=2026-10').json
+        with self.app.app_context():
+            with self.app.db():
+                self.app.db().execute("CREATE TRIGGER reject_assignment BEFORE INSERT ON archive_assignments "
+                                      "BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+        response = self.write('/archive/assignments', {'month': '2026-10', 'staff_ids': [2,1,3,4,5,6,7], 'expected': ids}, 'put')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.client.get(BASE + '/api/archive?month=2026-10').json, before)
+
     def test_simultaneous_archive_draw_keeps_one_result(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier

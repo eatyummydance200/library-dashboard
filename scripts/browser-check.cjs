@@ -62,7 +62,7 @@ async function main() {
   wednesday.setUTCDate(wednesday.getUTCDate()-(wednesday.getUTCDay()+6)%7+2);
   await call('Page.addScriptToEvaluateOnNewDocument',{source:`{const NativeDate=Date;window.__qaNativeDate=NativeDate;window.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[${wednesday.getTime()}]));}static now(){return ${wednesday.getTime()};}};}`});
   await call('Emulation.setDeviceMetricsOverride',{width:1536,height:1400,deviceScaleFactor:1,mobile:false});
-  async function waitFor(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error('Timed out: '+expression);}
+  async function waitFor(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error('Timed out: '+expression+' '+await evaluate('JSON.stringify({url:location.pathname,toast:document.querySelector("#toast")?.textContent,error:document.querySelector("#load-error")?.textContent,role:typeof user!=="undefined"?user?.role:null,tasks:[...document.querySelectorAll("[data-archive-task]")].slice(0,3).map(e=>({id:e.dataset.archiveTask,checked:e.checked,disabled:e.disabled}))})'));}
   async function loginAs(username,password){
     await call('Page.navigate',{url:baseURL+'/login'});
     await waitFor('document.readyState === "complete" && !!document.querySelector("input[name=username]")');
@@ -146,6 +146,19 @@ async function main() {
     assert.equal(await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').checked`),!completed);
     await evaluate(`document.querySelector('[data-archive-task="${task.id}"]').click()`);
     await waitFor(`!!document.querySelector('[data-archive-task="${task.id}"]')&&!document.querySelector('[data-archive-task="${task.id}"]').disabled&&document.querySelector('[data-archive-task="${task.id}"]').checked===${completed}`);
+    await evaluate('archiveMonth="2099-02";loadArchive()');
+    const manualIds=await evaluate('archiveData.participants.slice(0,7).map(p=>p.id)');
+    await evaluate('document.querySelector("#edit-archive").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-archive-assignment]").length'),7);
+    await evaluate(`[...document.querySelectorAll('[data-archive-assignment]')].forEach((s,i)=>s.value=${JSON.stringify(manualIds)}[i]);document.querySelector('#archive-edit-form').requestSubmit()`);
+    await waitFor('!document.querySelector("#archive-edit-dialog").open&&!!archiveData&&archiveData.month==="2099-02"&&archiveData.assignments.length===7');
+    assert.deepEqual(await evaluate('archiveData.assignments.map(a=>a.staff_id)'),manualIds);
+    const preserved=await evaluate('archiveData.assignments.map(a=>a.tasks)');
+    const swapped=[manualIds[1],manualIds[0],...manualIds.slice(2)];
+    await evaluate('document.querySelector("#edit-archive").click()');
+    await evaluate(`[...document.querySelectorAll('[data-archive-assignment]')].forEach((s,i)=>s.value=${JSON.stringify(swapped)}[i]);document.querySelector('#archive-edit-form').requestSubmit()`);
+    await waitFor(`!document.querySelector('#archive-edit-dialog').open&&!!archiveData&&archiveData.assignments[0].staff_id===${swapped[0]}`);
+    assert.deepEqual(await evaluate('archiveData.assignments.map(a=>a.tasks)'),preserved);
     const name='qa_archive_'+Date.now();
     const password='Browser-test-only-12345';
     await evaluate('setView("people")');
@@ -242,9 +255,12 @@ async function main() {
   await evaluate('setView("archive")');
   if(local)await evaluate('archiveMonth="2099-01";loadArchive()');
   await waitFor('document.querySelectorAll(".archive-group").length===7');
-  for(const width of [390,768,1024,1536]){
-    await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
+  for(const [width,height] of [[390,844],[768,1024],[1024,768],[1280,800],[1536,768]]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+    await evaluate('scrollTo(0,0)');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`archive overflow at ${width}px`);
+    const table=await evaluate('(()=>{const r=document.querySelector(".archive-table").getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:innerHeight,page:document.documentElement.scrollHeight};})()');
+    assert.equal(table.top>=0&&table.bottom<=table.height&&table.page<=table.height,true,`archive requires scrolling at ${width}x${height}: ${JSON.stringify(table)}`);
   }
   const archiveShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive.png'),Buffer.from(archiveShot.data,'base64'));
@@ -252,11 +268,11 @@ async function main() {
   const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging and archive drawing, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+main().catch(error => { console.error(error, errors); process.exitCode = 1; }).finally(async () => {
   if (ws) ws.close();
   browser.kill();
   await new Promise(resolve => browser.exitCode !== null ? resolve() : browser.once('exit', resolve));
