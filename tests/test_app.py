@@ -189,11 +189,11 @@ class ApplicationTests(unittest.TestCase):
     def test_tagging_migration_preserves_existing_database(self):
         with sqlite3.connect(self.database) as connection:
             connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
-                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE monthly_tags; PRAGMA user_version=1;')
+                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE monthly_tags; DROP TABLE duty_contact; PRAGMA user_version=1;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
@@ -382,11 +382,11 @@ class ApplicationTests(unittest.TestCase):
         self.write('/tagging/1/2026/9', {'completed': True}, 'put')
         with sqlite3.connect(self.database) as connection:
             connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
-                                     'ALTER TABLE users DROP COLUMN staff_id; PRAGMA user_version=2;')
+                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE duty_contact; PRAGMA user_version=2;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(connection.execute('SELECT count(*) FROM users').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT completed FROM monthly_tags').fetchone()[0], 1)
@@ -407,7 +407,7 @@ class ApplicationTests(unittest.TestCase):
                 DROP TABLE shifts;
                 ALTER TABLE legacy_shifts RENAME TO shifts;
                 CREATE INDEX shifts_day ON shifts(day);
-                PRAGMA user_version=3; COMMIT;""")
+                DROP TABLE duty_contact; PRAGMA user_version=3; COMMIT;""")
         self.app = create_app({'TESTING': True, 'DATABASE': self.database,
                               'SECRET_KEY': 'test-secret-' * 4, 'SESSION_COOKIE_SECURE': False})
         self.client = self.app.test_client()
@@ -424,7 +424,7 @@ class ApplicationTests(unittest.TestCase):
         shift = self.client.get(BASE + '/api/schedule').json['shifts'][-1]
         self.assertEqual(self.write('/shifts/' + str(shift['id']), {**body, 'start': 1290}, 'put').status_code, 200)
         with self.app.app_context():
-            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 5)
             self.assertEqual(self.app.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(self.app.db().execute('PRAGMA foreign_key_check').fetchall(), [])
 
@@ -463,6 +463,32 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.write('/staff', ['bad']).status_code, 400)
         self.assertEqual(self.write('/issues', {'day': '2026-99-99'}).status_code, 400)
 
+    def test_duty_contact_validation_permissions_and_persistence(self):
+        self.assertEqual(self.client.get(BASE + '/api/duty').status_code, 401)
+        self.login()
+        self.assertEqual(self.client.get(BASE + '/api/duty').json, {'teacher': '', 'extension': ''})
+        data = {'teacher': ' 김담당 ', 'extension': ' 1234 '}
+        self.assertEqual(self.client.put(BASE + '/api/duty', json=data).status_code, 403)
+        self.assertEqual(self.write('/duty', data, 'put').json, {'teacher': '김담당', 'extension': '1234'})
+        for invalid in [{}, {'teacher': None, 'extension': ''}, {'teacher': '가' * 41, 'extension': ''},
+                        {'teacher': '', 'extension': 'x123'}, {'teacher': '', 'extension': '1' * 21}]:
+            self.assertEqual(self.write('/duty', invalid, 'put').status_code, 400)
+        self.write('/users', {'username': 'worker', 'password': 'worker-password-123', 'role': 'worker'})
+        worker = self.app.test_client()
+        self.login(worker, 'worker', 'worker-password-123')
+        self.assertEqual(worker.get(BASE + '/api/duty').json['teacher'], '김담당')
+        self.assertEqual(self.write('/duty', data, 'put', worker).status_code, 403)
+        restarted = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with restarted.app_context():
+            self.assertEqual(restarted.db().execute('SELECT teacher,extension FROM duty_contact').fetchone()[:], ('김담당', '1234'))
+        self.assertEqual(self.write('/duty', {'teacher': '', 'extension': ''}, 'put').status_code, 200)
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript('DROP TABLE duty_contact; PRAGMA user_version=4;')
+        upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+        with upgraded.app_context():
+            self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(upgraded.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
+            self.assertEqual(upgraded.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 
 if __name__ == '__main__':
     unittest.main()

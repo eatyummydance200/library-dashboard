@@ -67,7 +67,7 @@ def create_app(config=None):
     with app.app_context():
         connection = db()
         version = connection.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1, 2, 3, 4):
+        if version not in (0, 1, 2, 3, 4, 5):
             raise RuntimeError('Unsupported database version; restore a compatible image')
         connection.execute('PRAGMA journal_mode=WAL')
         if version == 0:
@@ -132,6 +132,13 @@ def create_app(config=None):
                 ALTER TABLE shifts_v4 RENAME TO shifts;
                 CREATE INDEX shifts_day ON shifts(day);
                 PRAGMA user_version=4;
+                COMMIT;''')
+        if version < 5:
+            connection.executescript('''BEGIN IMMEDIATE;
+                CREATE TABLE duty_contact (
+                    id INTEGER PRIMARY KEY CHECK(id=1), teacher TEXT NOT NULL, extension TEXT NOT NULL
+                );
+                PRAGMA user_version=5;
                 COMMIT;''')
         if not connection.execute('SELECT 1 FROM users').fetchone():
             username = os.environ.get('ADMIN_USER', '')
@@ -296,6 +303,25 @@ def create_app(config=None):
     @bp.get('/api/me')
     def me():
         return jsonify(user={k: g.user[k] for k in ('id', 'username', 'role', 'staff_id')}, csrf=csrf())
+
+    @bp.get('/api/duty')
+    def get_duty():
+        row = db().execute('SELECT teacher,extension FROM duty_contact WHERE id=1').fetchone()
+        return jsonify(dict(row) if row else {'teacher': '', 'extension': ''})
+
+    @bp.put('/api/duty')
+    @admin
+    def update_duty():
+        data = payload()
+        teacher = text(data.get('teacher'), '담당쌤', 40, False)
+        extension = text(data.get('extension'), '내선번호', 20, False)
+        if extension and not re.fullmatch(r'[0-9+() -]{1,20}', extension):
+            fail('내선번호 형식을 확인해주세요.')
+        with db():
+            db().execute('INSERT INTO duty_contact(id,teacher,extension) VALUES (1,?,?) '
+                         'ON CONFLICT(id) DO UPDATE SET teacher=excluded.teacher,extension=excluded.extension',
+                         (teacher, extension))
+        return jsonify(teacher=teacher, extension=extension)
 
     @bp.get('/api/staff')
     def get_staff():

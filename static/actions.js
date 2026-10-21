@@ -51,6 +51,14 @@ async function loadStatus(){
   };
   $('#handoff').innerHTML=[['이전 근무',data.previous,data.previous_at],['현재 근무',data.current,data.at],['다음 근무',data.next,data.next_at]].map(([label,entries,time],i)=>`<article class="shift ${i===1?'current':''}" aria-label="${label}"><div class="shift-head"><h3>${i===1?'<i class="dot"></i>':icon(i===0?'clock':'arrow')}${label}</h3><time>${when(time)}</time></div>${group(entries,true)}${group(entries,false)}</article>`).join('');
 }
+let dutyContact={teacher:'',extension:''};
+async function loadDuty(){
+  dutyContact=await api('/duty');
+  $('#duty-teacher').textContent=dutyContact.teacher||'미등록';
+  $('#duty-extension').textContent=dutyContact.extension||'미등록';
+}
+$('#edit-duty').onclick=()=>{$('#duty-teacher-input').value=dutyContact.teacher;$('#duty-extension-input').value=dutyContact.extension;$('#duty-dialog').showModal();};
+formHandler('#duty-form',async()=>{await api('/duty',{method:'PUT',body:{teacher:$('#duty-teacher-input').value.trim(),extension:$('#duty-extension-input').value.trim()}});$('#duty-dialog').close();await loadDuty();toast('당직 정보를 저장했어요.');});
 async function loadIssues(){issues=await api('/issues');renderIssues();}
 function renderIssues(){
   const open=issues.filter(i=>!i.done);
@@ -140,13 +148,13 @@ async function initialize(){
   $('#preview-time').value=localInput();
   const data=await api('/me');user=data.user;csrfToken=data.csrf;
   $('#current-user').textContent=user.username+' · '+(user.role==='admin'?'관리자':'근무자');
-  await loadWeek();await Promise.all([loadIssues(),loadStatus()]);renderIcons();applyPermissions();
+  await loadWeek();await Promise.all([loadIssues(),loadStatus(),loadDuty()]);renderIcons();applyPermissions();
 }
 initialize().catch(error=>{$('#load-error').textContent='데이터를 불러오지 못했습니다. '+error.message+' 새로고침해주세요.';$('#load-error').hidden=false;});
 async function refreshCurrentView(){
   if(!user||document.hidden)return;
   if(manualTime){renderSchedule();return;}
-  try{$('#preview-time').value=localInput();await loadWeek();await Promise.all([loadStatus(),loadIssues()]);}catch(error){showError(error);}
+  try{$('#preview-time').value=localInput();await loadWeek();await Promise.all([loadStatus(),loadIssues(),loadDuty()]);}catch(error){showError(error);}
 }
 setInterval(refreshCurrentView,60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCurrentView();});

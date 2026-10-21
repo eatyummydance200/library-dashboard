@@ -75,6 +75,17 @@ async function main() {
   assert.equal(await evaluate('document.querySelector("#dashboard .week-board, #dashboard #schedule-slot, #dashboard .stats-card")'),null);
   assert.equal(await evaluate('document.querySelectorAll("#dashboard .issues-card").length'),1);
   assert.equal(await evaluate('Number(getComputedStyle(document.body).zoom)'),.8);
+  await waitFor('typeof dutyContact!=="undefined" && !!document.querySelector("#duty-teacher")');
+  assert.equal(await evaluate('document.querySelectorAll("#dashboard .duty-card").length'),1);
+  if(local){
+    const original=await evaluate('api("/duty")');
+    await evaluate('document.querySelector("#edit-duty").click();document.querySelector("#duty-teacher-input").value="<img src=x> 담당";document.querySelector("#duty-extension-input").value="0123";document.querySelector("#duty-form").requestSubmit()');
+    await waitFor('!document.querySelector("#duty-dialog").open && document.querySelector("#duty-teacher").textContent==="<img src=x> 담당"');
+    assert.equal(await evaluate('document.querySelector("#duty-teacher img")'),null);
+    await evaluate('loadDuty()');
+    assert.equal(await evaluate('document.querySelector("#duty-extension").textContent'),'0123');
+    await evaluate(`api('/duty',{method:'PUT',body:${JSON.stringify(original)}}).then(loadDuty)`);
+  }
   await evaluate('setView("schedule")');
 
   assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),26);
@@ -178,6 +189,7 @@ async function main() {
     await waitFor(`users.find(u=>u.id===${workerId}).staff_id===${assignment.staff_id}`);
     await evaluate('api("/logout",{method:"POST"})');
     await loginAs(name,password);
+    assert.equal(await evaluate('document.querySelector("#edit-duty").hidden'),true);
     await evaluate('archiveMonth="2099-01";setView("archive")');
     await waitFor('document.querySelectorAll("[data-archive-task]").length===20');
     assert.equal(await evaluate('document.querySelectorAll(".my-archive").length'),1);
@@ -259,7 +271,11 @@ async function main() {
   await evaluate('setView("schedule")');
   for(const width of [390,700,768,1024,1280,1536]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
-    await evaluate('scrollTo(0,0)');
+    await evaluate('setView("dashboard");scrollTo(0,0)');
+    const dutyLayout=await evaluate('(()=>{const a=document.querySelector(".dashboard-duty-layout>section").getBoundingClientRect(),b=document.querySelector(".duty-card").getBoundingClientRect();return {right:a.right,top:a.top,bottom:a.bottom,dutyLeft:b.left,dutyTop:b.top};})()');
+    assert.equal(width>1200?dutyLayout.dutyLeft>=dutyLayout.right:dutyLayout.dutyTop>=dutyLayout.bottom,true,`duty layout at ${width}px`);
+    assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`dashboard overflow at ${width}px`);
+    await evaluate('setView("schedule");scrollTo(0,0)');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".time-end")).fontSize===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontSize && getComputedStyle(document.querySelector(".time-end")).fontWeight===getComputedStyle(document.querySelector(".time-tick:not(.half-hour)")).fontWeight'),true);
     const size=await evaluate('(()=>{const b=document.querySelector(".week-board");return {w:b.clientWidth,sw:b.scrollWidth,h:b.clientHeight,sh:b.scrollHeight,tracks:[...b.querySelectorAll(".day-track")].map(e=>({w:e.clientWidth,sw:e.scrollWidth,h:e.clientHeight,sh:e.scrollHeight,display:getComputedStyle(e).display}))};})()');
@@ -308,7 +324,7 @@ async function main() {
   const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 26 half-hour ticks through 22:00, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard limited to status and issues, taller calendar beside compact stats and weekly shift-change issues, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 26 half-hour ticks through 22:00, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard with status, shared duty contact, and issues, taller calendar beside compact stats and weekly shift-change issues, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 
