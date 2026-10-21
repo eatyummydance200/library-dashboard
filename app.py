@@ -17,6 +17,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 ROOT = Path(__file__).resolve().parent
 KOREA = ZoneInfo('Asia/Seoul')
+ISSUE_CATEGORIES = ('인계', '공지', '시설', '근무 변경')
 ARCHIVE_GROUPS = [
     ['중앙', '코헤', 'FT'], ['국민', '경기', '경인'], ['동아', '아사히', '인민'],
     ['조선', '코탐'], ['매일경제', '전자', '요미'], ['한국경제', '인천', '경향'],
@@ -66,7 +67,7 @@ def create_app(config=None):
     with app.app_context():
         connection = db()
         version = connection.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1, 2, 3):
+        if version not in (0, 1, 2, 3, 4):
             raise RuntimeError('Unsupported database version; restore a compatible image')
         connection.execute('PRAGMA journal_mode=WAL')
         if version == 0:
@@ -117,6 +118,20 @@ def create_app(config=None):
                     UNIQUE(assignment_id,position)
                 );
                 PRAGMA user_version=3;
+                COMMIT;''')
+        if version < 4:
+            connection.executescript('''BEGIN IMMEDIATE;
+                CREATE TABLE shifts_v4 (
+                    id INTEGER PRIMARY KEY, staff_id INTEGER NOT NULL REFERENCES staff(id), day TEXT NOT NULL,
+                    start INTEGER NOT NULL CHECK(start>=540 AND start%30=0),
+                    end INTEGER NOT NULL CHECK(end<=1320 AND end%30=0 AND end>start),
+                    role TEXT NOT NULL CHECK(role IN ('desk','general'))
+                );
+                INSERT INTO shifts_v4(id,staff_id,day,start,end,role) SELECT id,staff_id,day,start,end,role FROM shifts;
+                DROP TABLE shifts;
+                ALTER TABLE shifts_v4 RENAME TO shifts;
+                CREATE INDEX shifts_day ON shifts(day);
+                PRAGMA user_version=4;
                 COMMIT;''')
         if not connection.execute('SELECT 1 FROM users').fetchone():
             username = os.environ.get('ADMIN_USER', '')
@@ -327,8 +342,8 @@ def create_app(config=None):
         person_id, start, end, role = (data.get(k) for k in ('staff_id', 'start', 'end', 'role'))
         if d.weekday() > 4 or type(person_id) is not int or type(start) is not int or type(end) is not int:
             fail('평일 날짜와 근무자·시간을 확인해주세요.')
-        if not (540 <= start < end <= 1260) or start % 30 or end % 30 or role not in ('desk', 'general'):
-            fail('근무 시간은 09:00~21:00 사이의 30분 단위입니다.')
+        if not (540 <= start < end <= 1320) or start % 30 or end % 30 or role not in ('desk', 'general'):
+            fail('근무 시간은 09:00~22:00 사이의 30분 단위입니다.')
         if not db().execute('SELECT 1 FROM staff WHERE id=? AND active=1', (person_id,)).fetchone():
             fail('재직 중인 근무자를 선택해주세요.')
         if db().execute('SELECT 1 FROM shifts WHERE day=? AND staff_id=? AND start<? AND end>? AND id<>?',
@@ -569,9 +584,21 @@ def create_app(config=None):
         day = request.args.get('day')
         if day:
             parse_day(day)
-        # shortcut: latest 200 issues; add pagination when the team needs older history.
+        category, week = request.args.get('category'), request.args.get('week')
+        if category is not None and category not in ISSUE_CATEGORIES:
+            fail('이슈 구분을 확인해주세요.')
+        start = monday_of(week) if week else None
+        try:
+            end = start + timedelta(days=7) if start else None
+        except OverflowError:
+            fail('날짜 범위를 확인해주세요.')
+        start, end = (start.isoformat(), end.isoformat()) if start else (None, None)
+        # shortcut: latest 200 matching issues; add pagination when older history is needed.
         rows = db().execute('SELECT i.*,u.username AS author FROM issues i JOIN users u ON u.id=i.author_id '
-                            'WHERE (? IS NULL OR i.day=?) ORDER BY i.created_at DESC,i.id DESC LIMIT 200', (day, day))
+                            'WHERE (? IS NULL OR i.day=?) AND (? IS NULL OR i.category=?) '
+                            'AND (? IS NULL OR (i.day>=? AND i.day<?)) '
+                            'ORDER BY i.created_at DESC,i.id DESC LIMIT 200',
+                            (day, day, category, category, start, start, end))
         return jsonify([dict(row) for row in rows])
 
     @bp.post('/api/issues')
@@ -579,7 +606,7 @@ def create_app(config=None):
         data = payload()
         day = parse_day(data.get('day', datetime.now(KOREA).date().isoformat()))
         category = data.get('category')
-        if category not in ('인계', '공지', '시설'):
+        if category not in ISSUE_CATEGORIES:
             fail('이슈 구분을 확인해주세요.')
         title = text(data.get('title'), '제목', 80)
         body = text(data.get('body'), '내용', 1500)

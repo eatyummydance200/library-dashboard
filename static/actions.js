@@ -18,7 +18,8 @@ async function loadWeek(){
   rawShifts=data.shifts;
   staff=data.staff.map((person,i)=>({...person,dbid:person.id,id:i,hours:0,desk:0,open:0,close:0}));
   shifts=Array.from({length:7},()=>[]);
-  const opening=new Set(),closing=new Set();
+  const opening=new Set(),closing=new Set(),closingAt=new Map();
+  for(const entry of rawShifts)closingAt.set(entry.day,Math.max(closingAt.get(entry.day)||1260,entry.end));
   for(const entry of rawShifts){
     const person=staff.find(s=>s.dbid===entry.staff_id);
     if(!person)continue;
@@ -27,11 +28,12 @@ async function loadWeek(){
     person.hours+=(entry.end-entry.start)/60;
     if(entry.role==='desk')person.desk+=(entry.end-entry.start)/60;
     if(entry.start===540)opening.add(entry.staff_id+':'+entry.day);
-    if(entry.end===1260)closing.add(entry.staff_id+':'+entry.day);
+    if(entry.end===closingAt.get(entry.day))closing.add(entry.staff_id+':'+entry.day);
   }
   for(const s of staff){s.open=[...opening].filter(k=>k.startsWith(s.dbid+':')).length;s.close=[...closing].filter(k=>k.startsWith(s.dbid+':')).length;}
   renderStats();renderPeople();renderSchedule();applyPermissions();if($('#staff-total'))$('#staff-total').textContent=staff.filter(s=>s.active).length+'명';
   document.querySelectorAll('.stats-card h2 small').forEach(e=>e.textContent=staff.filter(s=>s.active).length+'명');
+  if(activeView==='schedule')await loadShiftIssues();
 }
 function renderPeople(){
   $('#people-rows').innerHTML=staff.map((s,i)=>`<tr><td><div class="staff-name"><span class="avatar av-${i%7}">${esc(s.name.slice(0,1))}</span>${esc(s.name)}${s.active?'':' <small>비활성</small>'}</div></td><td>${esc(s.phone||'미등록')}</td><td>연속간행물실</td><td>${user?.role==='admin'?`<button class="btn" data-edit="${s.id}">수정</button>`:'조회 전용'}</td></tr>`).join('');
@@ -102,7 +104,7 @@ document.addEventListener('click',async event=>{
     const close=event.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
     const edit=event.target.closest('[data-edit]');if(edit)openPerson(+edit.dataset.edit);
     const shift=event.target.closest('[data-shift]');if(shift)openShift(+shift.dataset.shift);
-    const toggle=event.target.closest('[data-toggle-issue]');if(toggle){const issue=issues.find(i=>i.id===+toggle.dataset.toggleIssue);await api('/issues/'+issue.id,{method:'PATCH',body:{done:!issue.done}});await loadIssues();toast('이슈 상태를 저장했어요.');}
+    const toggle=event.target.closest('[data-toggle-issue]');if(toggle){const issue=[...issues,...shiftIssues].find(i=>i.id===+toggle.dataset.toggleIssue);await api('/issues/'+issue.id,{method:'PATCH',body:{done:!issue.done}});await loadIssues();if(activeView==='schedule')await loadShiftIssues();toast('이슈 상태를 저장했어요.');}
     const account=event.target.closest('[data-user]');if(account){const target=users.find(u=>u.id===+account.dataset.user);if(!confirm(`${target.username} 계정을 ${target.active?'비활성화':'활성화'}할까요?`))return;await api('/users/'+target.id,{method:'PATCH',body:{active:!target.active}});await loadUsers();toast('계정 상태를 변경했어요.');}
     if(event.target.closest('#add-shift'))openShift();
     if(event.target.closest('#copy-week')){$('#copy-source').value=isoDay(new Date(weekDates()[0].getTime()-7*86400000));$('#copy-target').value=isoDay(weekDates()[0]);$('#copy-dialog').showModal();}
@@ -126,7 +128,7 @@ formHandler('#shift-form',async()=>{
 $('#delete-shift').onclick=async()=>{if(editingShift===null||!confirm('이 근무 구간을 삭제할까요?'))return;try{await api('/shifts/'+editingShift,{method:'DELETE'});$('#shift-dialog').close();await loadWeek();await loadStatus();toast('근무를 삭제했어요.');}catch(error){showError(error);}};
 formHandler('#copy-form',async()=>{const data=await api('/schedule/copy',{method:'POST',body:{source:$('#copy-source').value,target:$('#copy-target').value}});$('#copy-dialog').close();await loadWeek();await loadStatus();toast(data.count+'개 근무 구간을 복사했어요.');});
 $('#add-issue').onclick=()=>{$('#issue-form').reset();$('#issue-date').value=today();$('#issue-dialog').showModal();};
-formHandler('#issue-form',async()=>{await api('/issues',{method:'POST',body:{day:$('#issue-date').value,category:$('#issue-category').value,title:$('#issue-title').value.trim(),body:$('#issue-content').value.trim()}});$('#issue-dialog').close();$('#issue-filter').value='all';await loadIssues();toast('인계 사항을 저장했어요.');});
+formHandler('#issue-form',async()=>{await api('/issues',{method:'POST',body:{day:$('#issue-date').value,category:$('#issue-category').value,title:$('#issue-title').value.trim(),body:$('#issue-content').value.trim()}});$('#issue-dialog').close();$('#issue-filter').value='all';await loadIssues();if(activeView==='schedule')await loadShiftIssues();toast('인계 사항을 저장했어요.');});
 $('#issue-filter').onchange=renderIssues;
 $('#logout-button').onclick=async()=>{try{await api('/logout',{method:'POST'});location.assign(base+'/login');}catch(error){showError(error);}};
 $('#password-button').onclick=()=>{$('#password-form').reset();$('#password-dialog').showModal();};
@@ -180,3 +182,20 @@ document.addEventListener('change',async event=>{
   catch(error){const previous=users.find(u=>u.id===Number(select.dataset.linkUser));select.value=previous?.staff_id||'';showError(error);}
   finally{select.disabled=false;}
 });
+
+let shiftIssueRequest=0;
+async function loadShiftIssues(){
+  const requestId=++shiftIssueRequest, week=isoDay(weekDates()[0]);
+  const data=await api('/issues?category='+encodeURIComponent('근무 변경')+'&week='+week);
+  if(requestId!==shiftIssueRequest||week!==isoDay(weekDates()[0]))return;
+  shiftIssues=data;
+  const dates=weekDates();$('#shift-issue-week').textContent=`${dates[0].getUTCMonth()+1}.${dates[0].getUTCDate()}–${dates[4].getUTCMonth()+1}.${dates[4].getUTCDate()}`;
+  renderShiftIssues();
+}
+function renderShiftIssues(){
+  const filter=$('#shift-issue-filter').value;
+  const visible=shiftIssues.filter(i=>filter==='all'||(filter==='done')===!!i.done);
+  $('#shift-issue-list').innerHTML=visible.map(i=>`<article class="shift-issue-entry ${i.done?'done':''}"><div><time>${esc(i.day)}</time><h3>${esc(i.title)}</h3><p>${esc(i.body)}</p><small>${esc(i.author)}</small></div><button class="text-btn" data-toggle-issue="${i.id}">${i.done?'다시 열기':'완료'}</button></article>`).join('')||'<p class="shift-issue-empty">해당 주의 이슈가 없습니다.</p>';
+}
+$('#shift-issue-filter').onchange=renderShiftIssues;
+$('#add-shift-issue').onclick=()=>{$('#issue-form').reset();const dates=weekDates(),now=today();$('#issue-date').value=now>=isoDay(dates[0])&&now<=isoDay(dates[4])?now:isoDay(dates[0]);$('#issue-category').value='근무 변경';$('#issue-dialog').showModal();};

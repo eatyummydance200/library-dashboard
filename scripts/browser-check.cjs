@@ -77,7 +77,8 @@ async function main() {
   assert.equal(await evaluate('Number(getComputedStyle(document.body).zoom)'),.8);
   await evaluate('setView("schedule")');
 
-  assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),24);
+  assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),26);
+  assert.equal(await evaluate('document.querySelector(".time-end").textContent'),'22:00');
   assert.equal(await evaluate('document.querySelector("#metrics")'),null);
   assert.equal(await evaluate('document.querySelectorAll(".metric").length'),0);
   assert.equal(await evaluate('document.querySelector(".shift.current h3").textContent.includes("현재 근무")'),true);
@@ -89,7 +90,7 @@ async function main() {
   assert.equal(await evaluate('getComputedStyle(document.body).fontFamily.includes("Pretendard")'),true);
   assert.equal(await evaluate('parseFloat(getComputedStyle(document.querySelector(".time-tick")).fontSize)>=16'),true);
 
-  for(const [hour,minute,expected] of [[8,59,null],[9,0,'540'],[9,29,'540'],[9,30,'570'],[20,59,'1230'],[21,0,null]]){
+  for(const [hour,minute,expected] of [[8,59,null],[9,0,'540'],[9,29,'540'],[9,30,'570'],[20,59,'1230'],[21,0,'1260'],[21,30,'1290'],[21,59,'1290'],[22,0,null]]){
     const stamp=new Date(wednesday);stamp.setUTCHours(hour-9,minute,0,0);
     await evaluate(`window.Date=class extends window.__qaNativeDate{constructor(...args){super(...(args.length?args:[${stamp.getTime()}]));}static now(){return ${stamp.getTime()};}};renderSchedule()`);
     assert.equal(await evaluate('document.querySelector(".current-row")?.dataset.start??null'),expected);
@@ -222,6 +223,30 @@ async function main() {
     assert.equal(await evaluate('document.querySelector("#issue-list img")'),null);
     await evaluate('document.querySelector("[data-toggle-issue]").click()');
     await waitFor('issues[0].done');
+    await evaluate('setView("schedule");loadShiftIssues()');
+    await evaluate('document.querySelector("#add-shift-issue").click()');
+    assert.equal(await evaluate('document.querySelector("#issue-category").value'),'근무 변경');
+    await evaluate('document.querySelector("#issue-title").value="브라우저 근무 변경 확인";document.querySelector("#issue-content").value="<img src=x onerror=alert(1)>";document.querySelector("#issue-form").requestSubmit()');
+    await waitFor('!document.querySelector("#issue-dialog").open&&shiftIssues.some(i=>i.title==="브라우저 근무 변경 확인"&&!i.done)');
+    assert.equal(await evaluate('document.querySelector("#shift-issue-list img")'),null);
+    await evaluate('document.querySelector("#shift-issue-list [data-toggle-issue]").click()');
+    await waitFor('shiftIssues[0].done');
+    await evaluate('document.querySelector("#shift-issue-filter").value="done";document.querySelector("#shift-issue-filter").dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('document.querySelector("#shift-issue-list").textContent.includes("브라우저 근무 변경 확인")'),true);
+    const issueId=await evaluate('shiftIssues[0].id');
+    const sourceWeek=await evaluate('isoDay(weekDates()[0])');
+    await evaluate('document.querySelector("#next-week").click()');
+    await waitFor(`document.querySelector('.week-board').dataset.week!==${JSON.stringify(sourceWeek)}&&document.querySelector('#shift-issue-week').textContent!==''&&!shiftIssues.some(i=>i.id===${issueId})`);
+    await evaluate('document.querySelector("#this-week").click()');
+    await waitFor(`document.querySelector('.week-board').dataset.week===${JSON.stringify(sourceWeek)}&&shiftIssues.some(i=>i.id===${issueId})`);
+    const late=await evaluate('(()=>{const p=staff.find(s=>s.active),day=isoDay(weekDates()[0]);return {staff_id:p.dbid,day,hours:p.hours,close:p.close,alreadyClosing:rawShifts.some(s=>s.staff_id===p.dbid&&s.day===day&&s.end===Math.max(1260,...rawShifts.filter(s=>s.day===day).map(s=>s.end)))};})()');
+    await evaluate(`document.querySelector('#add-shift').click();document.querySelector('#shift-person').value=${JSON.stringify(String(late.staff_id))};document.querySelector('#shift-day').value=${JSON.stringify(late.day)};document.querySelector('#shift-start').value='21:00';document.querySelector('#shift-end').value='22:00';document.querySelector('#shift-form').requestSubmit()`);
+    await waitFor('!document.querySelector("#shift-dialog").open&&rawShifts.some(s=>s.end===1320)');
+    const lateId=await evaluate(`rawShifts.find(s=>s.staff_id===${late.staff_id}&&s.day===${JSON.stringify(late.day)}&&s.end===1320).id`);
+    assert.equal(await evaluate(`document.querySelector('[data-shift="${lateId}"]').style.gridRowStart`),'25');
+    assert.equal(await evaluate(`staff.find(s=>s.dbid===${late.staff_id}).hours`),late.hours+1);
+    assert.equal(await evaluate(`staff.find(s=>s.dbid===${late.staff_id}).close`),late.close+(late.alreadyClosing?0:1));
+    await evaluate(`api('/shifts/${lateId}',{method:'DELETE'}).then(loadWeek)`);
     await evaluate('setView("dashboard")');
     await call('Page.reload');
     await waitFor('typeof user!=="undefined" && !!user && !!document.querySelector("#handoff .shift")');
@@ -233,13 +258,14 @@ async function main() {
   await evaluate('setView("schedule")');
   for(const width of [390,700,768,1024,1280,1536]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
+    await evaluate('scrollTo(0,0)');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
     const size=await evaluate('(()=>{const b=document.querySelector(".week-board");return {w:b.clientWidth,sw:b.scrollWidth,h:b.clientHeight,sh:b.scrollHeight,tracks:[...b.querySelectorAll(".day-track")].map(e=>({w:e.clientWidth,sw:e.scrollWidth,h:e.clientHeight,sh:e.scrollHeight,display:getComputedStyle(e).display}))};})()');
     assert.equal(size.sw<=size.w&&size.sh<=size.h,true,`schedule overflow at ${width}px: ${JSON.stringify(size)}`);
     assert.equal(await evaluate('[...document.querySelectorAll(".day-track")].filter(e=>getComputedStyle(e).display!=="none").length'),width<=900?1:5);
     const layout=await evaluate('(()=>{const a=document.querySelector("#full-schedule-slot").getBoundingClientRect(),b=document.querySelector(".stats-card").getBoundingClientRect();return {left:a.left,right:a.right,width:a.width,statsLeft:b.left,statsTop:b.top,statsWidth:b.width,top:a.top,zoom:Number(getComputedStyle(document.body).zoom),row:document.querySelector(".time-tick").getBoundingClientRect().height};})()');
     assert.equal(layout.zoom,width>900?.8:1);
-    if(width>1000){assert.equal(layout.statsLeft>=layout.right,true);assert.equal(layout.width>layout.statsWidth*2,true);assert.equal(Math.abs(layout.top-layout.statsTop)<2,true);assert.equal(layout.row>=25,true);}
+    if(width>1000){assert.equal(layout.statsLeft>=layout.right,true);assert.equal(layout.width>layout.statsWidth*2,true);assert.equal(Math.abs(layout.top-layout.statsTop)<2,true);assert.equal(layout.row>=30&&layout.row<=41,true);assert.equal(await evaluate('document.querySelector(".shift-issues-card").getBoundingClientRect().top>=document.querySelector(".stats-card").getBoundingClientRect().bottom'),true);}
 
 
   }
@@ -280,7 +306,7 @@ async function main() {
   const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard limited to status and issues, wide calendar beside compact stats, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 26 half-hour ticks through 22:00, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard limited to status and issues, taller calendar beside compact stats and weekly shift-change issues, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

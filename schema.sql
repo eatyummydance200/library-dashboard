@@ -10,7 +10,7 @@ CREATE TABLE users (
 CREATE TABLE shifts (
  id INTEGER PRIMARY KEY, staff_id INTEGER NOT NULL REFERENCES staff(id), day TEXT NOT NULL,
  start INTEGER NOT NULL CHECK(start>=540 AND start%30=0),
- end INTEGER NOT NULL CHECK(end<=1260 AND end%30=0 AND end>start),
+ end INTEGER NOT NULL CHECK(end<=1320 AND end%30=0 AND end>start),
  role TEXT NOT NULL CHECK(role IN ('desk','general'))
 );
 CREATE INDEX shifts_day ON shifts(day);

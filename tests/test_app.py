@@ -193,7 +193,7 @@ class ApplicationTests(unittest.TestCase):
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
@@ -386,12 +386,75 @@ class ApplicationTests(unittest.TestCase):
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(connection.execute('SELECT count(*) FROM users').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT completed FROM monthly_tags').fetchone()[0], 1)
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_22_hour_shift_boundaries_and_version_three_migration(self):
+        self.login()
+        before = self.client.get(BASE + '/api/schedule').json['shifts']
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript("""BEGIN;
+                CREATE TABLE legacy_shifts (
+                    id INTEGER PRIMARY KEY, staff_id INTEGER NOT NULL REFERENCES staff(id), day TEXT NOT NULL,
+                    start INTEGER NOT NULL CHECK(start>=540 AND start%30=0),
+                    end INTEGER NOT NULL CHECK(end<=1260 AND end%30=0 AND end>start),
+                    role TEXT NOT NULL CHECK(role IN ('desk','general')));
+                INSERT INTO legacy_shifts SELECT * FROM shifts;
+                DROP TABLE shifts;
+                ALTER TABLE legacy_shifts RENAME TO shifts;
+                CREATE INDEX shifts_day ON shifts(day);
+                PRAGMA user_version=3; COMMIT;""")
+        self.app = create_app({'TESTING': True, 'DATABASE': self.database,
+                              'SECRET_KEY': 'test-secret-' * 4, 'SESSION_COOKIE_SECURE': False})
+        self.client = self.app.test_client()
+        self.login()
+        self.assertEqual(self.client.get(BASE + '/api/schedule').json['shifts'], before)
+        day = (self.monday + timedelta(days=1)).isoformat()
+        body = {'staff_id': 1, 'day': day, 'start': 1260, 'end': 1320, 'role': 'desk'}
+        self.assertEqual(self.write('/shifts', body).status_code, 201)
+        at = lambda time: self.client.get(BASE + '/api/status', query_string={'at': day + 'T' + time + '+09:00'}).json
+        self.assertEqual(at('21:59:59')['current'][0]['staff_id'], 1)
+        self.assertEqual(at('22:00:00')['current'], [])
+        for invalid in [{'end': 1350}, {'start': 1320}, {'end': 1319}]:
+            self.assertEqual(self.write('/shifts', {**body, **invalid}).status_code, 400)
+        shift = self.client.get(BASE + '/api/schedule').json['shifts'][-1]
+        self.assertEqual(self.write('/shifts/' + str(shift['id']), {**body, 'start': 1290}, 'put').status_code, 200)
+        with self.app.app_context():
+            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 4)
+            self.assertEqual(self.app.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(self.app.db().execute('PRAGMA foreign_key_check').fetchall(), [])
+
+        seed = json.loads(json.dumps(SEED))
+        seed['shifts'][0].append({'id': 0, 'start': 21, 'end': 22, 'desk': False})
+        with patch.dict(os.environ, {'INITIAL_SCHEDULE_JSON': json.dumps(seed)}):
+            fresh = create_app({'TESTING': True, 'DATABASE': str(Path(self.directory.name) / 'fresh.sqlite3'),
+                                'SECRET_KEY': 'test-secret-' * 4})
+        with fresh.app_context():
+            self.assertEqual(fresh.db().execute('SELECT count(*) FROM shifts WHERE end=1320').fetchone()[0], 1)
+
+    def test_shift_change_issues_filter_by_category_week_and_status(self):
+        self.login()
+        day = self.monday.isoformat()
+        change = {'day': day, 'category': '근무 변경', 'title': '<img src=x>', 'body': '대체 근무 요청'}
+        self.assertEqual(self.write('/issues', change).status_code, 201)
+        self.write('/issues', {**change, 'category': '인계', 'title': '일반 인계'})
+        self.write('/issues', {**change, 'day': (self.monday + timedelta(days=7)).isoformat(), 'title': '다음 주 요청'})
+        query = {'category': '근무 변경', 'week': (self.monday + timedelta(days=3)).isoformat()}
+        response = self.client.get(BASE + '/api/issues', query_string=query)
+        self.assertEqual(len(response.json), 1)
+        issue = response.json[0]
+        self.assertEqual(issue['title'], change['title'])
+        self.assertEqual(issue['author'], 'testadmin')
+        self.write('/issues/' + str(issue['id']), {'done': True}, 'patch')
+        self.assertEqual(self.client.get(BASE + '/api/issues', query_string=query).json[0]['done'], 1)
+        self.assertEqual(len(self.client.get(BASE + '/api/issues').json), 3)
+        self.assertEqual(self.client.get(BASE + '/api/issues?category=bad').status_code, 400)
+        self.assertEqual(self.client.get(BASE + '/api/issues?week=wrong').status_code, 400)
+        self.assertEqual(self.client.get(BASE + '/api/issues?week=9999-12-31').status_code, 400)
 
     def test_invalid_dates_json_and_foreign_keys(self):
         self.login()
