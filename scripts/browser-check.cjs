@@ -67,11 +67,16 @@ async function main() {
     await call('Page.navigate',{url:baseURL+'/login'});
     await waitFor('document.readyState === "complete" && !!document.querySelector("input[name=username]")');
     await evaluate(`document.querySelector('input[name=username]').value=${JSON.stringify(username)};document.querySelector('input[name=password]').value=${JSON.stringify(password)};document.querySelector('form').requestSubmit()`);
-    await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector(".week-board") && typeof csrfToken !== "undefined" && !!csrfToken');
+    await waitFor('typeof user !== "undefined" && !!user && !!document.querySelector("#handoff .shift") && typeof csrfToken !== "undefined" && !!csrfToken');
   }
   await loginAs(settings.ADMIN_USER,settings.ADMIN_PASSWORD);
   await waitFor('document.querySelector("#handoff").children.length===3');
   await evaluate('document.fonts.ready');
+  assert.equal(await evaluate('document.querySelector("#dashboard .week-board, #dashboard #schedule-slot, #dashboard .stats-card")'),null);
+  assert.equal(await evaluate('document.querySelectorAll("#dashboard .issues-card").length'),1);
+  assert.equal(await evaluate('Number(getComputedStyle(document.body).zoom)'),.8);
+  await evaluate('setView("schedule")');
+
   assert.equal(await evaluate('document.querySelectorAll(".time-tick").length'),24);
   assert.equal(await evaluate('document.querySelector("#metrics")'),null);
   assert.equal(await evaluate('document.querySelectorAll(".metric").length'),0);
@@ -108,6 +113,7 @@ async function main() {
     assert.equal(await evaluate(`document.querySelector('#${id}').hidden`),false);
   }
 
+  await evaluate('setView("schedule")');
   await evaluate('document.querySelector("#staff-filter").value="0";document.querySelector("#staff-filter").dispatchEvent(new Event("change"))');
   assert.equal(await evaluate('document.querySelectorAll(".worker.dimmed").length>0'),true);
   await evaluate('selectedStaff="";renderSchedule()');
@@ -218,24 +224,30 @@ async function main() {
     await waitFor('issues[0].done');
     await evaluate('setView("dashboard")');
     await call('Page.reload');
-    await waitFor('typeof user!=="undefined" && !!user && !!document.querySelector(".week-board")');
+    await waitFor('typeof user!=="undefined" && !!user && !!document.querySelector("#handoff .shift")');
     assert.equal(await evaluate('staff[0].phone'),'010-1234-5678');
   }
   await evaluate('setView("dashboard")');
   await waitFor('document.querySelector("#handoff").children.length===3');
 
+  await evaluate('setView("schedule")');
   for(const width of [390,700,768,1024,1280,1536]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:1400,deviceScaleFactor:1,mobile:false});
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,`overflow at ${width}px`);
     const size=await evaluate('(()=>{const b=document.querySelector(".week-board");return {w:b.clientWidth,sw:b.scrollWidth,h:b.clientHeight,sh:b.scrollHeight,tracks:[...b.querySelectorAll(".day-track")].map(e=>({w:e.clientWidth,sw:e.scrollWidth,h:e.clientHeight,sh:e.scrollHeight,display:getComputedStyle(e).display}))};})()');
     assert.equal(size.sw<=size.w&&size.sh<=size.h,true,`schedule overflow at ${width}px: ${JSON.stringify(size)}`);
     assert.equal(await evaluate('[...document.querySelectorAll(".day-track")].filter(e=>getComputedStyle(e).display!=="none").length'),width<=900?1:5);
+    const layout=await evaluate('(()=>{const a=document.querySelector("#full-schedule-slot").getBoundingClientRect(),b=document.querySelector(".stats-card").getBoundingClientRect();return {left:a.left,right:a.right,width:a.width,statsLeft:b.left,statsTop:b.top,statsWidth:b.width,top:a.top,zoom:Number(getComputedStyle(document.body).zoom),row:document.querySelector(".time-tick").getBoundingClientRect().height};})()');
+    assert.equal(layout.zoom,width>900?.8:1);
+    if(width>1000){assert.equal(layout.statsLeft>=layout.right,true);assert.equal(layout.width>layout.statsWidth*2,true);assert.equal(Math.abs(layout.top-layout.statsTop)<2,true);assert.equal(layout.row>=25,true);}
+
 
   }
   await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
 
 
   assert.equal(await evaluate('(()=>{const board=document.querySelector(".week-board");return board.scrollHeight<=board.clientHeight&&board.scrollWidth<=board.clientWidth;})()'),true);
+  await evaluate('setView("dashboard")');
   const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,local?'preview-readable.png':'preview-live.png'),Buffer.from(shot.data,'base64'));
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
@@ -268,7 +280,7 @@ async function main() {
   const archiveMobileShot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
   writeFileSync(join(root,'preview-archive-mobile.png'),Buffer.from(archiveMobileShot.data,'base64'));
   assert.deepEqual(errors,[]);
-  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, weekly stats placement, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
+  console.log('PASS: Pretendard loading, 24 half-hour ticks, merged shift placement, no schedule scrolling, previous/current/next, 80% desktop scaling, dashboard limited to status and issues, wide calendar beside compact stats, persistent monthly tagging, archive drawing and manual assignments, full archive table without scrolling, account linking, worker-owned checklists, current-time boundaries, and 390–1536px layouts.');
   await command('Browser.close');
 }
 

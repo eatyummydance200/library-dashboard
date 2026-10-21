@@ -32,15 +32,14 @@ function layoutShifts(entries){
 }
 let selectedDay=Math.min(snapshot(new Date()).day,4);
 function renderSchedule(){
-  if(activeView!=='dashboard'&&activeView!=='schedule')return;
+  if(activeView!=='schedule')return;
   const dates=weekDates(), dateKey=date=>date.toISOString().slice(0,10);
   const now=new Date(), clock=koreaParts(now), todayKey=`${clock.year}-${clock.month}-${clock.day}`;
   const todayColumn=dates.findIndex(d=>dateKey(d)===todayKey), minute=Number(clock.hour)*60+Number(clock.minute);
   const currentSlot=minute>=540&&minute<1260&&todayColumn>=0?Math.floor((minute-540)/30):-1;
-  const slot=activeView==='schedule'?$('#full-schedule-slot'):$('#schedule-slot');
-  (activeView==='schedule'?$('#schedule-slot'):$('#full-schedule-slot')).innerHTML='';
+  const slot=$('#full-schedule-slot');
   const ticks=Array.from({length:24},(_,i)=>`<div class="time-tick ${i===currentSlot?'current-row':''} ${i%2?'half-hour':''}" data-start="${540+i*30}" ${i===currentSlot?'aria-current="time"':''}>${formatTime(9+i/2)}</div>`).join('');
-  slot.innerHTML=`<div class="${activeView==='schedule'?'card schedule-only':''}">
+  slot.innerHTML=`<div class="card schedule-only">
     <div class="card-head schedule-head"><h2>주간 근무 시간표</h2><div class="week-controls"><button class="icon-btn" id="prev-week" aria-label="이전 주">${icon('left')}</button><strong>${dates[0].getUTCMonth()+1}.${String(dates[0].getUTCDate()).padStart(2,'0')} – ${dates[4].getUTCMonth()+1}.${String(dates[4].getUTCDate()).padStart(2,'0')}</strong><button class="icon-btn" id="next-week" aria-label="다음 주">${icon('chevron')}</button><button class="btn" id="this-week">이번 주</button></div></div>
     <div class="schedule-tools"><div class="legend"><span class="desk-legend"><i></i>데스크</span><span class="standby-legend"><i></i>대기</span></div><div class="schedule-filters">${user?.role==='admin'?'<button class="btn" id="add-shift">＋ 근무 추가</button><button class="btn" id="copy-week">주 복사</button>':''}<select class="select" id="staff-filter" aria-label="시간표 근무자 선택"><option value="">전체 근무자</option>${staff.map(s=>`<option value="${s.id}" ${selectedStaff===String(s.id)?'selected':''}>${esc(s.name)}</option>`).join('')}</select></div></div>
     <div class="day-picker" role="group" aria-label="시간표 요일 선택">${days.map((d,i)=>`<button type="button" data-day="${i}" aria-pressed="${selectedDay===i}">${d} <small>${dates[i].getUTCMonth()+1}.${dates[i].getUTCDate()}</small></button>`).join('')}</div>
@@ -59,5 +58,5 @@ function renderStats(){
   $('#staff-stats').innerHTML=staff.map((s,i)=>`<div class="staff-row"><div class="staff-name"><span class="avatar av-${i%7}">${esc(s.name.slice(0,1))}</span>${esc(s.name)}</div><span>${s.hours}<small>h</small></span><span class="blue">${s.desk}<small>h</small></span><span>${s.open}<small>회</small></span><span>${s.close}<small>회</small></span></div>`).join('');
 }
 function renderNav(){$('#navigation').innerHTML=navItems.map(([id,label,ic])=>`<button data-view="${id}" class="${activeView===id?'active':''}" ${activeView===id?'aria-current="page"':''}>${icon(ic)}${label}${id==='issues'?`<span class="count-badge">${issues.filter(i=>!i.done).length}</span>`:''}</button>`).join('');}
-function setView(id){if(!navItems.some(n=>n[0]===id))return;activeView=id;document.body.dataset.page=id;$('.clock-control').hidden=id==='archive';document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==id);const title=navItems.find(n=>n[0]===id)[1];$('#breadcrumb').textContent=title;$('#page-title').textContent=id==='dashboard'?'근무 대시보드':title;renderNav();renderSchedule();applyPermissions();if(id==='archive')loadArchive().catch(showError);if(id==='tagging')loadTagging().catch(showError);if(id==='people'&&user.role==='admin')loadUsers().catch(showError);}
+function setView(id){if(!navItems.some(n=>n[0]===id))return;activeView=id;document.body.dataset.page=id;$('.clock-control').hidden=id==='archive'||id==='schedule';document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==id);const title=navItems.find(n=>n[0]===id)[1];$('#breadcrumb').textContent=title;$('#page-title').textContent=id==='dashboard'?'근무 대시보드':title;renderNav();renderSchedule();applyPermissions();if(id==='archive')loadArchive().catch(showError);if(id==='tagging')loadTagging().catch(showError);if(id==='people'&&user.role==='admin')loadUsers().catch(showError);}
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,2600);}
