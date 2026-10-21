@@ -30,7 +30,7 @@ class AuthFilter extends OncePerRequestFilter {
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
-    String path = request.getRequestURI().substring(request.getContextPath().length());
+    String path = request.getServletPath();
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "same-origin");
     response.setHeader(

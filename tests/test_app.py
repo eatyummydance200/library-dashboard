@@ -51,6 +51,8 @@ class ApplicationTests(unittest.TestCase):
 
     def test_authentication_csrf_and_asset_paths(self):
         self.assertEqual(self.client.get(BASE + '/api/staff').status_code, 401)
+        for path in ['/static/../api/staff', '/static/%2e%2e/api/staff']:
+            self.assertIn(self.client.get(BASE + path).status_code, (400, 401))
         self.assertEqual(self.client.post(BASE + '/login', data={}).status_code, 403)
         with self.client.get(BASE + '/static/glass.css') as stylesheet:
             self.assertEqual(stylesheet.status_code, 200)
