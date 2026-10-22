@@ -10,7 +10,7 @@
 flowchart LR
   Browser["사용자 · HTTPS"] --> Funnel["기존 Tailscale Funnel"]
   Funnel -->|"/ → 8088"| Desk["기존 Server Desk"]
-  Funnel -->|"/libaryDashBoard → 8090"| App["근무 대시보드 컨테이너\nSpring Boot + Tomcat\nHTML / CSS / JavaScript"]
+  Funnel -->|"/library-dashboard → 8090"| App["근무 대시보드 컨테이너\nSpring Boot + Tomcat\nHTML / CSS / JavaScript"]
   App --> DB[("SQLite\n영구 볼륨 /app/data")]
   Desk -. "이미지 배포 · 상태 확인" .-> App
 ```
@@ -31,30 +31,30 @@ flowchart LR
 요청한 철자와 대소문자를 그대로 사용한다.
 
 ```text
-https://eatyummydance200.tail72d30b.ts.net/libaryDashBoard
+https://eatyummydance200.tail72d30b.ts.net/library-dashboard
 ```
 
-끝에 `/`가 없는 주소로 들어오면 `/libaryDashBoard/`로 이동시킨다.
+끝에 `/`가 없는 주소로 들어오면 `/library-dashboard/`로 이동시킨다.
 
 | 외부 경로 | 연결 대상 |
 | --- | --- |
 | `/` 및 기존 관리 API | 기존 Server Desk, `127.0.0.1:8088` |
-| `/libaryDashBoard/` | 근무 대시보드 화면 |
-| `/libaryDashBoard/static/...` | CSS, JavaScript, 공식 로고 |
-| `/libaryDashBoard/api/...` | 근무 대시보드 API |
-| `/libaryDashBoard/healthz` | 비밀값 없는 정상 여부 응답 |
+| `/library-dashboard/` | 근무 대시보드 화면 |
+| `/library-dashboard/static/...` | CSS, JavaScript, 공식 로고 |
+| `/library-dashboard/api/...` | 근무 대시보드 API |
+| `/library-dashboard/healthz` | 비밀값 없는 정상 여부 응답 |
 
-Funnel은 하위 경로 프록시에서 mount 경로를 제거한다. 대상 URL에 동일한 경로를 포함해 복원하고, Spring servlet context-path도 같은 경로에 둔다. 예: 외부 `/libaryDashBoard/api/staff` → Funnel에서 `/api/staff` → 대상 URL 경로와 합쳐 내부 `/libaryDashBoard/api/staff`.
+Funnel은 하위 경로 프록시에서 mount 경로를 제거한다. 대상 URL에 동일한 경로를 포함해 복원하고, Spring servlet context-path도 같은 경로에 둔다. 예: 외부 `/library-dashboard/api/staff` → Funnel에서 `/api/staff` → 대상 URL 경로와 합쳐 내부 `/library-dashboard/api/staff`.
 
 아래 설정으로 새 경로를 추가한다. 먼저 현재 Funnel 설정을 보관하고, 기존 루트 연결을 유지한다.
 
 ```bash
 sudo tailscale funnel --bg --https=443 \
-  --set-path=/libaryDashBoard \
-  http://127.0.0.1:8090/libaryDashBoard
+  --set-path=/library-dashboard \
+  http://127.0.0.1:8090/library-dashboard
 ```
 
-앱의 `APP_BASE_PATH=/libaryDashBoard`를 URL 생성의 기준으로 쓴다. 정적 파일, API, 로그인 이동 경로를 이 기준으로 생성하고 외부·내부 접속 모두 검사한다. 실제 Funnel을 통한 경로·리다이렉트 동작은 배포 때 검증해야 한다.
+앱의 `APP_BASE_PATH=/library-dashboard`를 URL 생성의 기준으로 쓴다. 정적 파일, API, 로그인 이동 경로를 이 기준으로 생성하고 외부·내부 접속 모두 검사한다. 실제 Funnel을 통한 경로·리다이렉트 동작은 배포 때 검증해야 한다.
 
 ## 데이터와 핵심 규칙
 
@@ -82,7 +82,7 @@ DB는 `/app/data/library.sqlite3`. SQLite 외래키, WAL, 연결별 busy timeout
 
 모든 업무 화면과 API는 로그인이 필요하다. 비밀번호는 검증된 라이브러리의 해시 기능을 사용하고, 로그인 시도 제한과 쓰기 요청의 CSRF 검증을 적용한다. 입력 검증, SQL 파라미터 바인딩, 출력 이스케이프를 유지한다.
 
-세션 쿠키 이름은 `library_dashboard_session`, 경로는 `/libaryDashBoard`, 속성은 Secure·HttpOnly·SameSite=Lax로 둔다. 서명 키는 Server Desk 환경변수로 전달하며 연락처·비밀번호를 로그에 남기지 않는다. 계정 비활성화나 비밀번호 변경 시 기존 세션을 무효화한다.
+세션 쿠키 이름은 `library_dashboard_session`, 경로는 `/library-dashboard`, 속성은 Secure·HttpOnly·SameSite=Lax로 둔다. 서명 키는 Server Desk 환경변수로 전달하며 연락처·비밀번호를 로그에 남기지 않는다. 계정 비활성화나 비밀번호 변경 시 기존 세션을 무효화한다.
 
 경로와 쿠키 이름을 나눠도 두 서비스는 같은 HTTPS 출처를 공유한다. 이는 보안 격리가 아니며, 한 서비스의 스크립트 취약점이 다른 서비스에 영향을 줄 수 있다. 강한 격리가 필요해지면 별도 호스트명으로 분리해야 한다.
 
@@ -95,7 +95,7 @@ DB는 `/app/data/library.sqlite3`. SQLite 외래키, WAL, 연결별 busy timeout
 | 호스트 포트 | `8090` — 등록 직전 충돌 여부 재확인 |
 | 컨테이너 포트 | `8000` |
 | 접근 범위 | 서버 내부만, `127.0.0.1` |
-| 상태 확인 | `/libaryDashBoard/healthz` |
+| 상태 확인 | `/library-dashboard/healthz` |
 | 영구 볼륨 | `data:/app/data` |
 | 실제 볼륨 이름 | `sd-library-dashboard-data` |
 | 환경변수 | `APP_BASE_PATH`, DB 경로, 세션 서명 키, 최초 관리자 설정 |

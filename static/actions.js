@@ -13,8 +13,11 @@ function localInput(date=new Date()){const p=koreaParts(date);return `${p.year}-
 function today(){return localInput().slice(0,10);}
 function isoDay(date){return date.toISOString().slice(0,10);}
 function applyPermissions(){document.querySelectorAll('.admin-only').forEach(e=>e.hidden=user?.role!=='admin');}
+let weekRequest=0;
 async function loadWeek(){
-  const data=await api('/schedule?week='+isoDay(weekDates()[0]));
+  const requestId=++weekRequest, week=isoDay(weekDates()[0]);
+  const data=await api('/schedule?week='+week);
+  if(requestId!==weekRequest||week!==isoDay(weekDates()[0]))return;
   rawShifts=data.shifts;
   staff=data.staff.map((person,i)=>({...person,dbid:person.id,id:i,hours:0,desk:0,open:0,close:0}));
   shifts=Array.from({length:7},()=>[]);
@@ -101,10 +104,10 @@ document.addEventListener('click',async event=>{
     if(tag&&!tag.disabled){
       tag.disabled=true;
       try{
-        const completed=tag.getAttribute('aria-pressed')!=='true';
-        await api(`/tagging/${tag.dataset.tagPerson}/${tagYear}/${tag.dataset.month}`,{method:'PUT',body:{completed}});
-        tag.setAttribute('aria-pressed',String(completed));tag.textContent=completed?'○':'—';
-        tag.setAttribute('aria-label',`${tag.dataset.name} ${tagYear}년 ${tag.dataset.month}월 ${completed?'완료':'미완료'}`);
+        const completed=tag.getAttribute('aria-pressed')!=='true', year=tagYear, restoreFocus=document.activeElement===tag;
+        await api(`/tagging/${tag.dataset.tagPerson}/${year}/${tag.dataset.month}`,{method:'PUT',body:{completed}});
+        await loadTagging();
+        if(restoreFocus&&tagYear===year&&activeView==='tagging'&&document.activeElement===document.body)document.querySelector(`[data-tag-person="${tag.dataset.tagPerson}"][data-month="${tag.dataset.month}"]`)?.focus({preventScroll:true});
         toast('태깅 상태를 저장했습니다.');
       }finally{tag.disabled=false;}
     }
@@ -135,8 +138,8 @@ formHandler('#copy-form',async()=>{const data=await api('/schedule/copy',{method
 $('#add-issue').onclick=()=>{$('#issue-form').reset();$('#issue-date').value=today();$('#issue-dialog').showModal();};
 formHandler('#issue-form',async()=>{await api('/issues',{method:'POST',body:{day:$('#issue-date').value,category:$('#issue-category').value,title:$('#issue-title').value.trim(),body:$('#issue-content').value.trim()}});$('#issue-dialog').close();$('#issue-filter').value='all';await loadIssues();if(activeView==='schedule')await loadShiftIssues();toast('인계 사항을 저장했어요.');});
 $('#issue-filter').onchange=renderIssues;
-$('#logout-button').onclick=async()=>{try{await api('/logout',{method:'POST'});location.assign(base+'/login');}catch(error){showError(error);}};
-$('#password-button').onclick=()=>{$('#password-form').reset();$('#password-dialog').showModal();};
+$('#account-logout').onclick=async()=>{try{await api('/logout',{method:'POST'});location.assign(base+'/login');}catch(error){showError(error);}};
+$('#account-password').onclick=()=>{$('#account-dialog').close();$('#password-form').reset();$('#password-dialog').showModal();};
 formHandler('#password-form',async()=>{if($('#new-password').value!==$('#confirm-password').value)throw new Error('새 비밀번호가 일치하지 않습니다.');await api('/password',{method:'POST',body:{current:$('#current-password').value,password:$('#new-password').value}});location.assign(base+'/login');});
 $('#add-user').onclick=()=>{$('#user-form').reset();$('#user-staff').innerHTML='<option value="">미연결</option>'+staff.filter(s=>s.active).map(s=>`<option value="${s.dbid}">${esc(s.name)}</option>`).join('');$('#user-dialog').showModal();};
 formHandler('#user-form',async()=>{await api('/users',{method:'POST',body:{username:$('#user-name').value.trim(),password:$('#user-password').value,role:$('#user-role').value,staff_id:$('#user-staff').value?Number($('#user-staff').value):null}});$('#user-dialog').close();await loadUsers();toast('계정을 만들었어요.');});
@@ -144,6 +147,8 @@ $('#backup-button').onclick=()=>{location.assign(base+'/api/backup');};
 async function initialize(){
   const data=await api('/me');user=data.user;csrfToken=data.csrf;
   $('#current-user').textContent=user.username+' · '+(user.role==='admin'?'관리자':'근무자');
+  $('.account-avatar').textContent=user.username.slice(0,1).toUpperCase();
+  $('.account-avatar').setAttribute('aria-label',user.username+' 내 계정 메뉴');
   await loadWeek();await Promise.all([loadIssues(),loadStatus(),loadDuty()]);renderIcons();applyPermissions();
 }
 initialize().catch(error=>{$('#load-error').textContent='데이터를 불러오지 못했습니다. '+error.message+' 새로고침해주세요.';$('#load-error').hidden=false;});
@@ -155,24 +160,33 @@ setInterval(refreshCurrentView,60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCurrentView();});
 
 $('.top-actions .avatar').onclick=()=>$('#account-dialog').showModal();
-$('#account-password').onclick=()=>{$('#account-dialog').close();$('#password-button').click();};
-$('#account-logout').onclick=()=>$('#logout-button').click();
 
+function renderTaggingStatus(data, month){
+  const people=data.staff.filter(person=>person.active);
+  const completed=new Set(data.tags.filter(tag=>tag.month===month&&tag.completed).map(tag=>tag.staff_id));
+  const done=people.filter(person=>completed.has(person.id)).length, total=people.length;
+  const percent=total?Math.round(done/total*100):0;
+  $('#tag-status-month').textContent=`${data.year}년 ${month}월 · 재직 근무자 기준`;
+  $('#tag-status').innerHTML=`<div class="tag-status-summary"><strong>${done}<span> / ${total}명 완료</span></strong><span>${percent}%</span></div><progress max="${total||1}" value="${done}" aria-label="이번 달 태깅 완료율">${percent}%</progress><ul class="tag-status-people">${people.map(person=>`<li class="${completed.has(person.id)?'is-complete':''}"><span>${esc(person.name)}</span><strong>${completed.has(person.id)?'완료':'미완료'}</strong></li>`).join('')}</ul>${total?'':'<p class="hint">재직 중인 근무자가 없습니다.</p>'}`;
+}
 let tagYear=Number(koreaParts(new Date()).year), tagRequest=0;
 async function loadTagging(){
   const requestId=++tagRequest, year=tagYear;
   $('#tag-year').textContent=year+'년';
   $('#prev-tag-year').disabled=year<=2000;$('#next-tag-year').disabled=year>=2100;
   $('#tag-table').textContent='불러오는 중…';
+  $('#tag-status').textContent='불러오는 중…';
+  const current=koreaParts(new Date()), currentYear=Number(current.year);
   try{
-    const data=await api('/tagging?year='+year);
+    const [data,currentData]=await Promise.all([api('/tagging?year='+year),year===currentYear?null:api('/tagging?year='+currentYear)]);
     if(requestId!==tagRequest)return;
-    const current=koreaParts(new Date()), editable=user.role==='admin';
+    renderTaggingStatus(currentData||data,Number(current.month));
+    const editable=user.role==='admin';
     const months=Array.from({length:12},(_,i)=>i+1);
     const currentMonth=m=>year===Number(current.year)&&m===Number(current.month)?'this-month':'';
     $('#tag-permission').textContent=editable?'클릭하여 변경':'조회 전용';
     $('#tag-table').innerHTML=`<table class="tagging-table"><caption class="sr-only">${year}년 근무자별 월간 태깅 완료 여부</caption><thead><tr><th scope="col">근무자</th>${months.map(m=>`<th scope="col" class="${currentMonth(m)}">${m}월</th>`).join('')}</tr></thead><tbody>${data.staff.map(person=>`<tr><th scope="row">${esc(person.name)}${person.active?'':'<small>비활성</small>'}</th>${months.map(m=>{const completed=!!data.tags.find(t=>t.staff_id===person.id&&t.month===m)?.completed;return `<td class="${currentMonth(m)}"><button class="tag-mark" data-tag-person="${person.id}" data-month="${m}" data-name="${esc(person.name)}" aria-pressed="${completed}" aria-label="${esc(person.name)} ${year}년 ${m}월 ${completed?'완료':'미완료'}" ${editable?'':'disabled'}>${completed?'○':'—'}</button></td>`;}).join('')}</tr>`).join('')||'<tr><td colspan="13">등록된 근무자가 없습니다.</td></tr>'}</tbody></table>`;
-  }catch(error){if(requestId===tagRequest)$('#tag-table').textContent='태깅 표를 불러오지 못했습니다. 태깅 탭을 다시 눌러주세요.';throw error;}
+  }catch(error){if(requestId===tagRequest){$('#tag-table').textContent='태깅 표를 불러오지 못했습니다. 태깅 탭을 다시 눌러주세요.';$('#tag-status').textContent='이번 달 현황을 불러오지 못했습니다.';}throw error;}
 }
 $('#prev-tag-year').onclick=()=>{if(tagYear>2000){tagYear--;loadTagging().catch(showError);}};
 $('#next-tag-year').onclick=()=>{if(tagYear<2100){tagYear++;loadTagging().catch(showError);}};

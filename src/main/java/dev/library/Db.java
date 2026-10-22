@@ -29,12 +29,12 @@ class Db {
         throw new IllegalStateException("Unsupported database version");
       update(c, "PRAGMA journal_mode=WAL");
       if (version == 0) {
-        script(c, "BEGIN;" + resource("schema.sql") + "COMMIT;");
         JsonNode seed =
             mapper.readTree(
                 System.getenv().getOrDefault("INITIAL_SCHEDULE_JSON", resource("seed.json")));
         update(c, "BEGIN IMMEDIATE");
         try {
+          script(c, resource("schema.sql"));
           LocalDate monday = Api.monday(LocalDate.now(Application.KOREA).toString());
           for (JsonNode p : seed.path("staff"))
             update(

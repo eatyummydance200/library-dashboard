@@ -7,7 +7,7 @@ const { join } = require('node:path');
 const WebSocket = require('ws');
 const root = require('node:path').resolve(__dirname, '..');
 const settings=Object.fromEntries(readFileSync(join(root,'.runtime.env'),'utf8').trim().split('\n').filter(l=>l&&!l.startsWith('#')).map(l=>{const at=l.indexOf('=');return [l.slice(0,at),l.slice(at+1)];}));
-const baseURL=process.argv[2]||'http://127.0.0.1:8091/libaryDashBoard';
+const baseURL=process.argv[2]||'http://127.0.0.1:8091/library-dashboard';
 const local=baseURL.startsWith('http://127.0.0.1:8091/');
 const profile = mkdtempSync(join(tmpdir(), 'moa-check-'));
 const browser = spawn('/home/dev/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome', [
@@ -127,7 +127,9 @@ async function main() {
   assert.equal(await evaluate('document.querySelector("#schedule .stats-card h2").textContent.startsWith("주당 근무 시간")'),true);
   assert.equal(await evaluate('document.querySelector("#page-subtitle, .eyebrow")'),null);
   assert.equal(await evaluate('document.querySelectorAll(".staff-row").length>=7'),true);
-  assert.equal(await evaluate('document.querySelector(".brand img").naturalWidth>0'),true);
+  assert.equal(await evaluate('document.querySelector(".brand img").naturalWidth'),539);
+  assert.equal(await evaluate('document.querySelector(".brand img").naturalHeight'),301);
+  assert.equal(await evaluate('document.querySelector(".brand img").closest("a")'),null);
   assert.equal(await evaluate('document.querySelector("#load-error").hidden'),true);
   for(const id of ['schedule','people','issues','archive','tagging','dashboard']){
     await evaluate(`document.querySelector('[data-view="${id}"]').click()`);
@@ -217,6 +219,8 @@ async function main() {
   await evaluate('setView("tagging")');
   await waitFor('!!document.querySelector(".tag-mark")');
   assert.equal(await evaluate('document.querySelectorAll(".tagging-table thead th").length'),13);
+  assert.equal(await evaluate('document.querySelectorAll(".tagging-status-card").length'),1);
+  assert.equal(await evaluate('document.querySelectorAll(".sidebar .profile,.sidebar .profile-user,#password-button,#logout-button").length'),0);
   if(local){
     const tag=await evaluate('(()=>{const b=[...document.querySelectorAll(".tag-mark")].find(b=>Number(b.dataset.month)===9);return {person:b.dataset.tagPerson,before:b.getAttribute("aria-pressed")};})()');
     await evaluate(`document.querySelector('[data-tag-person="${tag.person}"][data-month="9"]').click()`);

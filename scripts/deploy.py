@@ -48,12 +48,13 @@ try:
     match = next((a for a in entries if a['config']['name'] == 'library-dashboard'), None)
     if match:
         assert match['config']['hostPort'] == 8090 and match['config']['containerPort'] == 8000, 'Existing registration differs; inspect before changing it'
+        assert match['config']['healthPath'] == '/library-dashboard/healthz' and match['config']['url'] == host + '/library-dashboard/', 'Existing registration uses a different path; update Server Desk healthPath, url and APP_BASE_PATH before deploying'
         app_id = match['id']
     else:
         spec = {
             'name': 'library-dashboard', 'image': 'ghcr.io/eatyummydance200/library-dashboard:main',
             'hostPort': 8090, 'containerPort': 8000, 'bindAddress': '127.0.0.1',
-            'healthPath': '/libaryDashBoard/healthz', 'url': host + '/libaryDashBoard/',
+            'healthPath': '/library-dashboard/healthz', 'url': host + '/library-dashboard/',
             'github': 'https://github.com/eatyummydance200/library-dashboard',
             'env': settings, 'volumes': [{'name': 'data', 'target': '/app/data'}],
         }

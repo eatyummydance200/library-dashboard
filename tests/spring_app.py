@@ -98,7 +98,7 @@ class SpringApp:
         APPS.append(self)
         for _ in range(300):
             try:
-                with urllib.request.urlopen(self.url+'/libaryDashBoard/healthz', timeout=1) as response:
+                with urllib.request.urlopen(self.url+'/library-dashboard/healthz', timeout=1) as response:
                     if response.status == 200:
                         return
             except (OSError, urllib.error.URLError):

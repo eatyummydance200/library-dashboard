@@ -79,9 +79,7 @@ class AuthFilter extends OncePerRequestFilter {
                 supplied.getBytes(StandardCharsets.UTF_8)))
           throw new Api.Failure(403, "요청이 만료되었습니다. 새로고침 후 다시 시도해주세요.");
         if (request.getContentLengthLong() > 65536) throw new Api.Failure(413, "요청 내용이 너무 큽니다.");
-        if (path.startsWith("/api/")
-            && request.getContentType() != null
-            && request.getContentType().startsWith("application/json")) {
+        if (path.startsWith("/api/")) {
           byte[] body = request.getInputStream().readNBytes(65537);
           if (body.length > 65536) throw new Api.Failure(413, "요청 내용이 너무 큽니다.");
           var original = request;

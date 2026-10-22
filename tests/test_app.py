@@ -4,13 +4,15 @@ import re
 import sqlite3
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from spring_app import KOREA, create_app, stop_apps
 
-BASE = '/libaryDashBoard'
+BASE = '/library-dashboard'
 SEED = {'staff': [{'id': 0, 'name': '테스트 가'}, {'id': 1, 'name': '테스트 나'}],
         'shifts': [[{'id': 0, 'start': 9, 'end': 10.5, 'desk': True},
                     {'id': 1, 'start': 10.5, 'end': 21, 'desk': True}], [], [], [], []]}
@@ -61,6 +63,13 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.client.get(BASE).location, BASE + '/')
         page = self.client.get(BASE + '/')
         self.assertIn(BASE + '/static/actions.js', page.text)
+        self.assertIn(BASE + '/static/inu-logo.png', page.text)
+        self.assertNotRegex(page.text, r'<a\b[^>]*href="https://www\.inu\.ac\.kr/')
+        logo = self.client.get(BASE + '/static/inu-logo.png')
+        self.assertEqual(logo.status_code, 200)
+        self.assertTrue(logo.data.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(int.from_bytes(logo.data[16:20], 'big'), 539)
+        self.assertEqual(int.from_bytes(logo.data[20:24], 'big'), 301)
         self.assertIn("script-src 'self'", page.headers['Content-Security-Policy'])
         self.assertEqual(self.client.post(BASE + '/api/staff', json={}).status_code, 403)
 
@@ -68,6 +77,71 @@ class ApplicationTests(unittest.TestCase):
         for _ in range(5):
             self.assertEqual(self.login(password='wrong-password').status_code, 401)
         self.assertEqual(self.login().status_code, 429)
+
+    def test_seven_simultaneous_logins_stay_within_heap_limit(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        clients = [self.app.test_client() for _ in range(7)]
+        tokens = [re.search(r'name="csrf" value="([^"]+)"', client.get(BASE + '/login').text)[1]
+                  for client in clients]
+        barrier = Barrier(7)
+
+        def login(index):
+            barrier.wait(timeout=5)
+            return clients[index].post(BASE + '/login', data={
+                'csrf': tokens[index], 'username': f'unknown-{index}', 'password': 'wrong-password',
+            })
+
+        with ThreadPoolExecutor(max_workers=7) as pool:
+            responses = list(pool.map(login, range(7)))
+        self.assertTrue(all(r.status_code in (401, 429) for r in responses))
+        self.assertTrue(any(r.status_code == 429 for r in responses))
+        for response in responses:
+            if response.status_code == 429:
+                self.assertIn('잠시 후 다시 시도해주세요.', response.text)
+                self.assertIn('name="csrf"', response.text)
+        self.assertEqual(self.client.get(BASE + '/healthz').status_code, 200)
+        self.assertEqual(self.login().status_code, 302)
+
+    def test_chunked_json_limit_covers_media_types_and_exact_boundary(self):
+        self.login()
+        token = self.client.get(BASE + '/api/me').json['csrf']
+        payload = json.dumps({'category': '인계', 'title': '본문 제한', 'body': '확인'}).encode()
+        for content_type in ['application/json', 'Application/JSON', 'application/problem+json']:
+            for size, status in [(65536, 201), (65537, 413)]:
+                with self.subTest(content_type=content_type, size=size):
+                    body = payload + b' ' * (size - len(payload))
+                    request = urllib.request.Request(self.app.url + BASE + '/api/issues',
+                        data=iter([body[:20000], body[20000:]]), method='POST',
+                        headers={'Content-Type': content_type, 'X-CSRF-Token': token})
+                    try:
+                        response = self.client.opener.open(request, timeout=30)
+                    except urllib.error.HTTPError as error:
+                        response = error
+                    with response:
+                        self.assertEqual(response.status, status)
+                        response.read()
+        self.assertEqual(len(self.client.get(BASE + '/api/issues').json), 3)
+
+    def test_failed_initial_seed_is_retried_until_corrected(self):
+        database = str(Path(self.directory.name) / 'initial.sqlite3')
+        invalid = {'staff': [{'id': 0, 'name': '가'}, {'id': 0, 'name': '나'}], 'shifts': []}
+        with patch.dict(os.environ, {'INITIAL_SCHEDULE_JSON': json.dumps(invalid)}):
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, 'Spring Boot did not start'):
+                    create_app({'DATABASE': database})
+                with sqlite3.connect(database) as connection:
+                    self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 0)
+                    self.assertEqual(connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+        fresh = create_app({'DATABASE': database})
+        with fresh.app_context():
+            self.assertEqual(fresh.db().execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(fresh.db().execute('SELECT count(*) FROM staff').fetchone()[0], 2)
+            self.assertEqual(fresh.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
+            self.assertEqual(fresh.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+        self.assertEqual(self.login(fresh.test_client()).status_code, 302)
 
     def test_schedule_seed_and_half_hour_boundary(self):
         self.login()

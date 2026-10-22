@@ -7,11 +7,12 @@ Java 21 + Spring Boot 3.5.16 + SQLite로 실행하는 근무 관리 서비스. �
 - 근무자 이름·전화번호·재직 상태 관리, 이슈 작성·완료
 - 관리자·근무자 권한, 계정 관리·비밀번호 변경, DB 백업 다운로드
 - Pretendard 글꼴·인천대학교 Blue/Yellow를 사용한 가독성 중심 대시보드
-- 연도별 월간 태깅 완료 표, 월별 과월호 담당 추첨·신문사별 완료 체크
+- 이번 달 재직 근무자의 태깅 완료 인원·완료율·개인별 현황, 연도별 월간 태깅 표
+- 월별 과월호 담당 추첨·신문사별 완료 체크
 
 ## 실행
 
-Java 21과 Maven이 필요하다. 글꼴 다운로드·회귀 테스트·배포 보조 도구에는 개발/CI 환경의 Python 3만 사용하며, 운영 컨테이너에는 Python이 없다.
+Java 21과 Maven이 필요하다. 글꼴 다운로드·회귀 테스트·배포 보조 도구에는 개발/CI 환경의 Python 3을 사용한다. JavaScript 회귀 테스트에는 Node.js 18 이상이 필요하며, 운영 컨테이너에는 Python·Node.js가 없다.
 
 첫 개발 실행 전 `python scripts/fetch-font.py`로 공식 Pretendard 1.3.9 글꼴을 준비한다. Docker 빌드와 로컬 실행 도구에서도 자동 수행하며 SHA-256을 검사한다. 운영 중에는 글꼴도 자체 서버에서 제공한다. 글꼴 라이선스는 `static/fonts/OFL.txt`에 포함한다.
 
@@ -22,12 +23,13 @@ Java 21과 Maven이 필요하다. 글꼴 다운로드·회귀 테스트·배포 
 | `ADMIN_USER` | 첫 실행 때 생성할 관리자 아이디 |
 | `ADMIN_PASSWORD` | 초기 비밀번호, 10자 이상. 저장소나 이미지에 넣지 않음 |
 | `DATABASE` | 기본 `/app/data/library.sqlite3` |
-| `APP_BASE_PATH` | 기본 `/libaryDashBoard` |
+| `APP_BASE_PATH` | 기본 `/library-dashboard` |
 | `COOKIE_SECURE` | 운영 `true`, 로컬 HTTP 개발 때만 `false` |
 | `INITIAL_SCHEDULE_JSON` | 선택 사항. 첫 실행 때만 가져올 근무자·시간표 JSON |
 
 ```bash
 mvn -B verify
+node --test tests/*.test.cjs
 java -Xms32m -Xmx256m -jar target/app.jar
 python -m unittest discover -s tests -v
 ```
@@ -36,7 +38,7 @@ python -m unittest discover -s tests -v
 
 ## 운영 주소
 
-https://eatyummydance200.tail72d30b.ts.net/libaryDashBoard
+https://eatyummydance200.tail72d30b.ts.net/library-dashboard
 
 ## Server Desk 배포
 
@@ -48,21 +50,23 @@ https://eatyummydance200.tail72d30b.ts.net/libaryDashBoard
 | 호스트 포트 | `8090` |
 | 컨테이너 포트 | `8000` |
 | 바인딩 | `127.0.0.1` |
-| 상태 확인 | `/libaryDashBoard/healthz` |
+| 상태 확인 | `/library-dashboard/healthz` |
 | 볼륨 | `data:/app/data` → `sd-library-dashboard-data` |
 | 자동 업데이트 | 초기 꺼짐 |
+
+기존 배포를 전환할 때는 `.runtime.env`와 Server Desk에 저장된 환경변수 `APP_BASE_PATH=/library-dashboard`, 상태 확인 경로 `/library-dashboard/healthz`, 공개 URL을 함께 갱신한다. 기존 등록이 다른 경로를 사용하면 배포 도구는 중단한다. 경로가 바뀌면 다시 로그인해야 한다.
 
 Funnel 루트는 기존 Server Desk에 유지하고 새 경로만 추가한다. Funnel이 mount 접두 경로를 제거하므로 대상 URL에 동일한 접두 경로를 넣는다.
 
 ```bash
 sudo tailscale funnel --bg --https=443 \
-  --set-path=/libaryDashBoard \
-  http://127.0.0.1:8090/libaryDashBoard
+  --set-path=/library-dashboard \
+  http://127.0.0.1:8090/library-dashboard
 ```
 
 초기 서버에서 레지스트리 연결 전 기동이 필요하면 `python scripts/deploy.py bootstrap`으로 같은 앱 등록과 로컬 이미지 기동을 수행한다. 이미지 게시 후 `python scripts/deploy.py deploy`로 Server Desk 이미지 배포에 전환한다. 두 명령은 비공개 `.runtime.env`와 기존 관리 서비스의 `.env`를 사용하며 비밀값을 출력하지 않는다.
 
-외부 주소의 `/libaryDashBoard`는 `/libaryDashBoard/`로 이동한다. 로그인·정적 파일·API·쿠키 모두 해당 경로를 사용한다.
+외부 주소의 `/library-dashboard`는 `/library-dashboard/`로 이동한다. 로그인·정적 파일·API·쿠키 모두 해당 경로를 사용한다.
 
 ## 데이터 규칙
 
@@ -86,7 +90,7 @@ docker exec sd-library-dashboard java -jar /app/app.jar --backup
 
 한 서버·한 앱 프로세스·소규모 팀을 기준으로 한다. 여러 서버에서 동시 쓰기나 컨테이너 수평 확장이 필요하면 SQLite를 재검토한다. Funnel의 경로 분리는 별도 출처 격리가 아니므로 같은 도메인의 Server Desk와 보안 경계를 공유한다.
 
-디자인 참고와 데이터 설계는 [ARCHITECTURE.md](ARCHITECTURE.md). 공식 브랜드 출처: [인천대학교 UI](https://www.inu.ac.kr/inu/728/subview.do).
+디자인 참고와 데이터 설계는 [ARCHITECTURE.md](ARCHITECTURE.md). 로고는 사용자가 제공한 INU 워드마크 원본을 사용하며 외부 홈페이지로 연결하지 않는다. 공식 브랜드 출처: [인천대학교 UI](https://www.inu.ac.kr/inu/728/subview.do).
 
 ## 시간표와 월별 태깅
 
@@ -124,7 +128,7 @@ DB 버전 4는 근무 종료 시각 제약을 22시까지 넓힌다. 기존 근�
 
 ## Spring Boot 이관
 
-서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/libaryDashBoard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 버전 5 그대로 사용하며 기존 행·비밀번호 해시를 변경하지 않는다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
+서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/library-dashboard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 버전 5 그대로 사용하며 기존 행·비밀번호 해시를 변경하지 않는다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
 
 운영 JVM은 힙 최대 256MB, 메타스페이스 최대 128MB로 제한한다. 전체 프로세스 메모리는 힙보다 크므로 Docker 메모리 사용량도 확인한다. CI는 Java 단위 테스트와 실제 Spring HTTP 프로세스를 대상으로 하는 기존 기능 회귀 테스트를 실행한다. `python3 scripts/run-local.py`는 비공개 개발 환경과 `data/local.sqlite3`로 8091 포트에 Java 서버를 실행한다.
 

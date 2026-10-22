@@ -3,12 +3,20 @@ package dev.library;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.*;
+import java.util.concurrent.Semaphore;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import org.bouncycastle.crypto.generators.SCrypt;
 
 final class Passwords {
   private static final SecureRandom RANDOM = new SecureRandom();
+  // Keep concurrent scrypt allocations within the 256MB production heap.
+  private static final Semaphore HASHES = new Semaphore(2);
+
+  private static void acquire() {
+    if (!HASHES.tryAcquire())
+      throw new Api.Failure(429, "로그인 요청이 많습니다. 잠시 후 다시 시도해주세요.");
+  }
 
   static String token() {
     byte[] b = new byte[32];
@@ -17,22 +25,28 @@ final class Passwords {
   }
 
   static String encode(String password) {
-    String salt = token().substring(0, 16);
-    return "scrypt:32768:8:1$"
-        + salt
-        + "$"
-        + HexFormat.of()
-            .formatHex(
-                SCrypt.generate(
-                    password.getBytes(StandardCharsets.UTF_8),
-                    salt.getBytes(StandardCharsets.UTF_8),
-                    32768,
-                    8,
-                    1,
-                    64));
+    acquire();
+    try {
+      String salt = token().substring(0, 16);
+      return "scrypt:32768:8:1$"
+          + salt
+          + "$"
+          + HexFormat.of()
+              .formatHex(
+                  SCrypt.generate(
+                      password.getBytes(StandardCharsets.UTF_8),
+                      salt.getBytes(StandardCharsets.UTF_8),
+                      32768,
+                      8,
+                      1,
+                      64));
+    } finally {
+      HASHES.release();
+    }
   }
 
   static boolean matches(String hash, String password) {
+    acquire();
     try {
       String[] parts = hash.split("\\$", -1), method = parts[0].split(":");
       if (parts.length != 3) return false;
@@ -67,6 +81,8 @@ final class Passwords {
       return MessageDigest.isEqual(expected, actual);
     } catch (Exception e) {
       return false;
+    } finally {
+      HASHES.release();
     }
   }
 }

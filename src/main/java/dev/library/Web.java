@@ -55,8 +55,15 @@ class Web {
       error = "로그인 시도가 많습니다. 15분 후 다시 시도해주세요.";
     } else {
       var user = db.read(c -> Db.one(c, "SELECT * FROM users WHERE username=?", name));
-      boolean valid =
-          Passwords.matches(user == null ? dummy : (String) user.get("password_hash"), password);
+      boolean valid;
+      try {
+        valid = Passwords.matches(user == null ? dummy : (String) user.get("password_hash"), password);
+      } catch (Api.Failure e) {
+        response.setStatus(e.status);
+        model.addAttribute("error", e.getMessage());
+        model.addAttribute("csrf", AuthFilter.csrf(r));
+        return "login";
+      }
       if (user == null || Api.number(user.get("active")) == 0 || !valid) {
         db.write(
             c -> {

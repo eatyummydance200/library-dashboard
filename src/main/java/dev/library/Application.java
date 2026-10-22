@@ -21,7 +21,7 @@ public class Application {
       Db.scheduledBackup();
       return;
     }
-    String base = System.getenv().getOrDefault("APP_BASE_PATH", "/libaryDashBoard");
+    String base = System.getenv().getOrDefault("APP_BASE_PATH", "/library-dashboard");
     if (!base.matches("/[A-Za-z0-9_-]+"))
       throw new IllegalArgumentException("Invalid APP_BASE_PATH");
     SpringApplication.run(Application.class, args);
