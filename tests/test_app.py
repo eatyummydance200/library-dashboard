@@ -137,7 +137,7 @@ class ApplicationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
         fresh = create_app({'DATABASE': database})
         with fresh.app_context():
-            self.assertEqual(fresh.db().execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(fresh.db().execute('PRAGMA user_version').fetchone()[0], 6)
             self.assertEqual(fresh.db().execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(fresh.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(fresh.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
@@ -271,7 +271,7 @@ class ApplicationTests(unittest.TestCase):
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
@@ -464,7 +464,7 @@ class ApplicationTests(unittest.TestCase):
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
             self.assertEqual(connection.execute('SELECT count(*) FROM users').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT completed FROM monthly_tags').fetchone()[0], 1)
@@ -502,7 +502,7 @@ class ApplicationTests(unittest.TestCase):
         shift = self.client.get(BASE + '/api/schedule').json['shifts'][-1]
         self.assertEqual(self.write('/shifts/' + str(shift['id']), {**body, 'start': 1290}, 'put').status_code, 200)
         with self.app.app_context():
-            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 6)
             self.assertEqual(self.app.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(self.app.db().execute('PRAGMA foreign_key_check').fetchall(), [])
 
@@ -564,10 +564,43 @@ class ApplicationTests(unittest.TestCase):
             connection.executescript('DROP TABLE duty_contact; PRAGMA user_version=4;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
-            self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 5)
+            self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 6)
             self.assertEqual(upgraded.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(upgraded.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 
+
+    def test_duty_contact_expires_and_a_new_save_uses_the_server_date(self):
+        self.login()
+        contact = {'teacher': '오늘 담당', 'extension': '1234'}
+        self.assertEqual(self.write('/duty', {**contact, 'day': '2099-01-01'}, 'put').json, contact)
+        today = datetime.now(KOREA).date()
+        with sqlite3.connect(self.database) as connection:
+            self.assertEqual(connection.execute('SELECT day FROM duty_contact').fetchone()[0], today.isoformat())
+        for stored_day in [today - timedelta(days=1), today + timedelta(days=1)]:
+            with sqlite3.connect(self.database) as connection:
+                connection.execute('UPDATE duty_contact SET day=?', (stored_day.isoformat(),))
+            self.assertEqual(self.client.get(BASE + '/api/duty').json, {'teacher': '', 'extension': ''})
+        self.assertEqual(self.write('/duty', contact, 'put').json, contact)
+        self.assertEqual(self.client.get(BASE + '/api/duty').json, contact)
+
+    def test_duty_version_five_migration_preserves_contact_for_today(self):
+        self.login()
+        contact = {'teacher': '기존 담당', 'extension': '1234'}
+        self.write('/duty', contact, 'put')
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript('ALTER TABLE duty_contact DROP COLUMN day; PRAGMA user_version=5;')
+        upgraded = create_app({'TESTING': True, 'DATABASE': self.database})
+        client = upgraded.test_client()
+        self.login(client)
+        self.assertEqual(client.get(BASE + '/api/duty').json, contact)
+        with upgraded.app_context():
+            connection = upgraded.db()
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(connection.execute('SELECT day FROM duty_contact').fetchone()[0],
+                             datetime.now(KOREA).date().isoformat())
+            self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
+            self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_legacy_password_cookie_rotation_and_json_size_limit(self):
         import hashlib

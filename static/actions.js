@@ -102,14 +102,28 @@ document.addEventListener('click',async event=>{
     const view=event.target.closest('[data-view]');if(view)setView(view.dataset.view);
     const tag=event.target.closest('[data-tag-person]');
     if(tag&&!tag.disabled){
-      tag.disabled=true;
+      const year=Number(tag.dataset.year), month=Number(tag.dataset.month), id=Number(tag.dataset.tagPerson);
+      const key=`${id}/${year}/${month}`;
+      if(tagSaves.has(key))return;
+      const completed=tag.getAttribute('aria-pressed')!=='true';
+      tag.setAttribute('aria-busy','true');tag.setAttribute('aria-disabled','true');
+      const saving=api('/tagging/'+key,{method:'PUT',body:{completed}});
+      tagSaves.set(key,saving);
       try{
-        const completed=tag.getAttribute('aria-pressed')!=='true', year=tagYear, restoreFocus=document.activeElement===tag;
-        await api(`/tagging/${tag.dataset.tagPerson}/${year}/${tag.dataset.month}`,{method:'PUT',body:{completed}});
-        await loadTagging();
-        if(restoreFocus&&tagYear===year&&activeView==='tagging'&&document.activeElement===document.body)document.querySelector(`[data-tag-person="${tag.dataset.tagPerson}"][data-month="${tag.dataset.month}"]`)?.focus({preventScroll:true});
+        await saving;
+        if(tagStatusData?.year===year){
+          const entry=tagStatusData.tags.find(t=>t.staff_id===id&&t.month===month);
+          if(entry)entry.completed=Number(completed);
+          else tagStatusData.tags.push({staff_id:id,month,completed:Number(completed)});
+        }
+        tag.setAttribute('aria-pressed',String(completed));
+        tag.setAttribute('aria-label',`${tag.dataset.name} ${year}년 ${month}월 ${completed?'완료':'미완료'}`);
+        tag.textContent=completed?'○':'—';
+        const current=koreaParts(new Date());
+        if(tagStatusData?.year===year&&year===Number(current.year)&&month===Number(current.month))
+          renderTaggingStatus(tagStatusData,month,true);
         toast('태깅 상태를 저장했습니다.');
-      }finally{tag.disabled=false;}
+      }finally{tagSaves.delete(key);tag.removeAttribute('aria-busy');tag.removeAttribute('aria-disabled');}
     }
     const close=event.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
     const edit=event.target.closest('[data-edit]');if(edit)openPerson(+edit.dataset.edit);
@@ -161,31 +175,50 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCur
 
 $('.top-actions .avatar').onclick=()=>$('#account-dialog').showModal();
 
-function renderTaggingStatus(data, month){
+function renderTaggingStatus(data, month, update=false){
   const people=data.staff.filter(person=>person.active);
   const completed=new Set(data.tags.filter(tag=>tag.month===month&&tag.completed).map(tag=>tag.staff_id));
   const done=people.filter(person=>completed.has(person.id)).length, total=people.length;
   const percent=total?Math.round(done/total*100):0;
+  const count=`${done}<span> / ${total}명 완료</span>`;
+  if(update){
+    $('#tag-status-count').innerHTML=count;
+    $('#tag-status-percent').textContent=percent+'%';
+    $('#tag-status progress').value=done;
+    $('#tag-status progress').textContent=percent+'%';
+    for(const person of people){
+      const item=$(`[data-tag-status-person="${person.id}"]`);
+      item.classList.toggle('is-complete',completed.has(person.id));
+      item.querySelector('strong').textContent=completed.has(person.id)?'완료':'미완료';
+    }
+    return;
+  }
   $('#tag-status-month').textContent=`${data.year}년 ${month}월 · 재직 근무자 기준`;
-  $('#tag-status').innerHTML=`<div class="tag-status-summary"><strong>${done}<span> / ${total}명 완료</span></strong><span>${percent}%</span></div><progress max="${total||1}" value="${done}" aria-label="이번 달 태깅 완료율">${percent}%</progress><ul class="tag-status-people">${people.map(person=>`<li class="${completed.has(person.id)?'is-complete':''}"><span>${esc(person.name)}</span><strong>${completed.has(person.id)?'완료':'미완료'}</strong></li>`).join('')}</ul>${total?'':'<p class="hint">재직 중인 근무자가 없습니다.</p>'}`;
+  $('#tag-status').innerHTML=`<div class="tag-status-summary"><strong id="tag-status-count">${count}</strong><span id="tag-status-percent">${percent}%</span></div><progress max="${total||1}" value="${done}" aria-label="이번 달 태깅 완료율">${percent}%</progress><ul class="tag-status-people">${people.map(person=>`<li data-tag-status-person="${person.id}" class="${completed.has(person.id)?'is-complete':''}"><span>${esc(person.name)}</span><strong>${completed.has(person.id)?'완료':'미완료'}</strong></li>`).join('')}</ul>${total?'':'<p class="hint">재직 중인 근무자가 없습니다.</p>'}`;
 }
-let tagYear=Number(koreaParts(new Date()).year), tagRequest=0;
+let tagYear=Number(koreaParts(new Date()).year), tagRequest=0, tagStatusData=null;
+const tagSaves=new Map();
 async function loadTagging(){
   const requestId=++tagRequest, year=tagYear;
+  tagStatusData=null;
   $('#tag-year').textContent=year+'년';
   $('#prev-tag-year').disabled=year<=2000;$('#next-tag-year').disabled=year>=2100;
   $('#tag-table').textContent='불러오는 중…';
   $('#tag-status').textContent='불러오는 중…';
   const current=koreaParts(new Date()), currentYear=Number(current.year);
   try{
+    // A year change must read after pending writes, otherwise it can restore an old check state.
+    if(tagSaves.size)await Promise.allSettled([...tagSaves.values()]);
+    if(requestId!==tagRequest)return;
     const [data,currentData]=await Promise.all([api('/tagging?year='+year),year===currentYear?null:api('/tagging?year='+currentYear)]);
     if(requestId!==tagRequest)return;
-    renderTaggingStatus(currentData||data,Number(current.month));
+    tagStatusData=currentData||data;
+    renderTaggingStatus(tagStatusData,Number(current.month));
     const editable=user.role==='admin';
     const months=Array.from({length:12},(_,i)=>i+1);
     const currentMonth=m=>year===Number(current.year)&&m===Number(current.month)?'this-month':'';
     $('#tag-permission').textContent=editable?'클릭하여 변경':'조회 전용';
-    $('#tag-table').innerHTML=`<table class="tagging-table"><caption class="sr-only">${year}년 근무자별 월간 태깅 완료 여부</caption><thead><tr><th scope="col">근무자</th>${months.map(m=>`<th scope="col" class="${currentMonth(m)}">${m}월</th>`).join('')}</tr></thead><tbody>${data.staff.map(person=>`<tr><th scope="row">${esc(person.name)}${person.active?'':'<small>비활성</small>'}</th>${months.map(m=>{const completed=!!data.tags.find(t=>t.staff_id===person.id&&t.month===m)?.completed;return `<td class="${currentMonth(m)}"><button class="tag-mark" data-tag-person="${person.id}" data-month="${m}" data-name="${esc(person.name)}" aria-pressed="${completed}" aria-label="${esc(person.name)} ${year}년 ${m}월 ${completed?'완료':'미완료'}" ${editable?'':'disabled'}>${completed?'○':'—'}</button></td>`;}).join('')}</tr>`).join('')||'<tr><td colspan="13">등록된 근무자가 없습니다.</td></tr>'}</tbody></table>`;
+    $('#tag-table').innerHTML=`<table class="tagging-table"><caption class="sr-only">${year}년 근무자별 월간 태깅 완료 여부</caption><thead><tr><th scope="col">근무자</th>${months.map(m=>`<th scope="col" class="${currentMonth(m)}">${m}월</th>`).join('')}</tr></thead><tbody>${data.staff.map(person=>`<tr><th scope="row">${esc(person.name)}${person.active?'':'<small>비활성</small>'}</th>${months.map(m=>{const completed=!!data.tags.find(t=>t.staff_id===person.id&&t.month===m)?.completed;return `<td class="${currentMonth(m)}"><button class="tag-mark" data-tag-person="${person.id}" data-year="${year}" data-month="${m}" data-name="${esc(person.name)}" aria-pressed="${completed}" aria-label="${esc(person.name)} ${year}년 ${m}월 ${completed?'완료':'미완료'}" ${editable?'':'disabled'}>${completed?'○':'—'}</button></td>`;}).join('')}</tr>`).join('')||'<tr><td colspan="13">등록된 근무자가 없습니다.</td></tr>'}</tbody></table>`;
   }catch(error){if(requestId===tagRequest){$('#tag-table').textContent='태깅 표를 불러오지 못했습니다. 태깅 탭을 다시 눌러주세요.';$('#tag-status').textContent='이번 달 현황을 불러오지 못했습니다.';}throw error;}
 }
 $('#prev-tag-year').onclick=()=>{if(tagYear>2000){tagYear--;loadTagging().catch(showError);}};

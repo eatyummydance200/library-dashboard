@@ -25,7 +25,7 @@ class Db {
     Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"));
     try (Connection c = connect()) {
       int version = ((Number) one(c, "PRAGMA user_version").values().iterator().next()).intValue();
-      if (version < 0 || version > 5)
+      if (version < 0 || version > 6)
         throw new IllegalStateException("Unsupported database version");
       update(c, "PRAGMA journal_mode=WAL");
       if (version == 0) {
@@ -61,7 +61,7 @@ class Db {
           throw e;
         }
       }
-      for (int v = 2; v <= 5; v++) if (version < v) script(c, resource("migrations/" + v + ".sql"));
+      for (int v = 2; v <= 6; v++) if (version < v) script(c, resource("migrations/" + v + ".sql"));
       if (one(c, "SELECT id FROM users LIMIT 1") == null) {
         String name = System.getenv().getOrDefault("ADMIN_USER", ""),
             password = System.getenv().getOrDefault("ADMIN_PASSWORD", "");

@@ -42,7 +42,7 @@ https://eatyummydance200.tail72d30b.ts.net/library-dashboard
 
 ## Server Desk 배포
 
-`main` push → GitHub Actions 테스트 → `ghcr.io/eatyummydance200/library-dashboard:main` 및 커밋 SHA 태그 게시. 배포는 Server Desk에서 실행한다. 비공개 GHCR 패키지는 기존 Server Desk에 읽기 자격 증명을 설정해야 하며, 공개 패키지는 익명 pull 가능 여부를 확인한다.
+`main` push → GitHub Actions 빌드 확인(기능 테스트 생략) → `ghcr.io/eatyummydance200/library-dashboard:main` 및 커밋 SHA 태그 게시. 배포는 Server Desk에서 실행한다. 비공개 GHCR 패키지는 기존 Server Desk에 읽기 자격 증명을 설정해야 하며, 공개 패키지는 익명 pull 가능 여부를 확인한다.
 
 | 항목 | 값 |
 | --- | --- |
@@ -122,14 +122,16 @@ PC 화면(901px 이상)은 80% 배율로 표시한다. 시간표는 별도로 �
 
 DB 버전 4는 근무 종료 시각 제약을 22시까지 넓힌다. 기존 근무 ID·시간·역할과 다른 모든 업무 기록은 보존한다. 배포 전 백업을 생성하며 버전 4를 지원하지 않는 구버전 이미지로 되돌리려면 호환되는 백업도 함께 복원해야 한다.
 
-대시보드의 당직 카드에서 담당쌤과 내선번호를 공유한다. 관리자가 수정하고 모든 로그인 근무자가 조회하며, 정보는 서버에 저장되어 재시작 후에도 유지된다. 날짜별 이력 없이 현재 연락처를 관리한다. 데이터베이스 v5는 기존 데이터를 유지하고 당직 연락처 테이블만 추가한다. 이전 이미지로 돌아갈 때는 호환되는 백업을 함께 복원해야 한다.
+대시보드의 당직 카드에서 담당쌤과 내선번호를 공유한다. 관리자가 수정하고 모든 로그인 근무자가 조회한다. 저장한 한국 날짜(Asia/Seoul)에만 유효하며 다음 날에는 담당쌤·내선번호를 모두 `미등록`으로 표시한다. 같은 날 서버를 재시작해도 유지되고, 서버가 자정에 꺼져 있어도 다음 조회에서 초기화된다. 열린 화면에는 기존 1분 갱신 주기로 반영하며 화면 복귀 시에도 다시 조회한다. 과거 연락처는 응답하지 않고 다음 저장 때 한 건을 덮어쓰므로 날짜별 이력은 제공하지 않는다.
+
+데이터베이스 v6는 당직 연락처에 저장 날짜를 추가한다. v5 이전의 연락처는 전환 당일 한국 날짜를 부여해 그날까지만 유지하며 다른 업무 기록은 보존한다. v6를 지원하지 않는 이전 이미지로 돌아갈 때는 호환되는 배포 전 백업도 함께 복원해야 한다.
 
 근무 현황은 현재 한국 시각을 기준으로 조회하며 날짜 옆에 시:분을 표시하고 1분마다 갱신한다. 조회 시각 조절과 상단 학기 문구는 제거했다. 시간표 근무 블록에는 이름만 표시하고 역할은 색상과 범례로 구분한다. 근무 편집 창과 접근성 레이블에는 구분·시간 정보를 유지한다.
 
 ## Spring Boot 이관
 
-서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/library-dashboard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 버전 5 그대로 사용하며 기존 행·비밀번호 해시를 변경하지 않는다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
+서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/library-dashboard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 시작 시 버전 6으로 업그레이드하며 기존 업무 행·비밀번호 해시를 보존한다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
 
-운영 JVM은 힙 최대 256MB, 메타스페이스 최대 128MB로 제한한다. 전체 프로세스 메모리는 힙보다 크므로 Docker 메모리 사용량도 확인한다. CI는 Java 단위 테스트와 실제 Spring HTTP 프로세스를 대상으로 하는 기존 기능 회귀 테스트를 실행한다. `python3 scripts/run-local.py`는 비공개 개발 환경과 `data/local.sqlite3`로 8091 포트에 Java 서버를 실행한다.
+운영 JVM은 힙 최대 256MB, 메타스페이스 최대 128MB로 제한한다. 전체 프로세스 메모리는 힙보다 크므로 Docker 메모리 사용량도 확인한다. CI는 `mvn -B -DskipTests package`로 빌드만 확인하고 기능 테스트는 실행하지 않는다. `python3 scripts/run-local.py`는 비공개 개발 환경과 `data/local.sqlite3`로 8091 포트에 Java 서버를 실행한다.
 
-백업 타이머는 `ops/library-dashboard-backup.service`의 Java 명령을 사용한다. SQLite `VACUUM INTO`로 WAL에 커밋된 데이터를 포함하는 일관된 스냅샷을 만들고 7일간 보관한다. 이관 전 이미지는 `ghcr.io/eatyummydance200/library-dashboard@sha256:54ab30741394e39d2ebb0e019ffcea5fde1a0e6bbdb3256f7cafcb6a55a0395a`이며 DB 버전과 비밀번호 형식을 유지하므로 이미지 롤백이 가능하다. 롤백 시 백업 서비스 명령도 해당 런타임에 맞춘다.
+백업 타이머는 `ops/library-dashboard-backup.service`의 Java 명령을 사용한다. SQLite `VACUUM INTO`로 WAL에 커밋된 데이터를 포함하는 일관된 스냅샷을 만들고 7일간 보관한다. 이관 전 이미지는 `ghcr.io/eatyummydance200/library-dashboard@sha256:54ab30741394e39d2ebb0e019ffcea5fde1a0e6bbdb3256f7cafcb6a55a0395a`이다. 현재 DB v6에서 이 이미지로 롤백하려면 호환되는 배포 전 백업도 함께 복원해야 한다. 롤백 시 백업 서비스 명령도 해당 런타임에 맞춘다.

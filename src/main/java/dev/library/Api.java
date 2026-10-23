@@ -166,7 +166,7 @@ class Api {
   Object duty() {
     return db.read(
         c -> {
-          var row = one(c, "SELECT teacher,extension FROM duty_contact WHERE id=1");
+          var row = one(c, "SELECT teacher,extension FROM duty_contact WHERE id=1 AND day=?", today());
           return row == null ? Map.of("teacher", "", "extension", "") : row;
         });
   }
@@ -181,10 +181,11 @@ class Api {
         c -> {
           update(
               c,
-              "INSERT INTO duty_contact(id,teacher,extension) VALUES(1,?,?) ON CONFLICT(id) DO"
-                  + " UPDATE SET teacher=excluded.teacher,extension=excluded.extension",
+              "INSERT INTO duty_contact(id,teacher,extension,day) VALUES(1,?,?,?) ON CONFLICT(id) DO"
+                  + " UPDATE SET teacher=excluded.teacher,extension=excluded.extension,day=excluded.day",
               teacher,
-              extension);
+              extension,
+              today());
           return Map.of("teacher", teacher, "extension", extension);
         });
   }
