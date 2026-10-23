@@ -53,14 +53,47 @@ async function loadStatus(){
   };
   $('#handoff').innerHTML=[['이전 근무',data.previous,data.previous_at],['현재 근무',data.current,data.at],['다음 근무',data.next,data.next_at]].map(([label,entries,time],i)=>`<article class="shift ${i===1?'current':''}" aria-label="${label}"><div class="shift-head"><h3>${i===1?'<i class="dot"></i>':icon(i===0?'clock':'arrow')}${label}</h3><time>${when(time)}</time></div>${group(entries,true)}${group(entries,false)}</article>`).join('');
 }
-let dutyContact={teacher:'',extension:''};
+let teachers=[], editingTeacher=null;
+async function loadTeachers(){
+  teachers=await api('/teachers');
+  $('#teacher-total').textContent=teachers.length+'명';
+  $('#teacher-rows').innerHTML=teachers.map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.position||'미등록')}</td><td>${esc(t.extension||'미등록')}</td><td>${esc(t.phone||'미등록')}</td><td>${esc(t.location||'미등록')}</td><td>${user?.role==='admin'?`<button class="btn" data-edit-teacher="${t.id}">수정</button>`:'조회 전용'}</td></tr>`).join('')||'<tr><td colspan="6">등록된 선생님이 없습니다.</td></tr>';
+}
+function openTeacher(id=null){
+  editingTeacher=id;
+  const person=teachers.find(t=>t.id===id);
+  for(const field of ['name','position','extension','phone','location'])$('#teacher-'+field).value=person?.[field]||'';
+  $('#teacher-dialog h2').textContent=person?'선생님 정보 수정':'선생님 추가';
+  $('#teacher-dialog').showModal();
+}
+$('#add-teacher').onclick=()=>openTeacher();
+formHandler('#teacher-form',async()=>{
+  const body=Object.fromEntries(['name','position','extension','phone','location'].map(field=>[field,$('#teacher-'+field).value.trim()]));
+  await api(editingTeacher===null?'/teachers':'/teachers/'+editingTeacher,{method:editingTeacher===null?'POST':'PUT',body});
+  $('#teacher-dialog').close();await loadTeachers();await loadDuty();toast('선생님 정보를 저장했어요.');
+});
+let dutyContact={teacher_id:0,teacher:'',extension:'',phone:''};
 async function loadDuty(){
   dutyContact=await api('/duty');
   $('#duty-teacher').textContent=dutyContact.teacher||'미등록';
   $('#duty-extension').textContent=dutyContact.extension||'미등록';
+  $('#duty-phone').textContent=dutyContact.phone||'미등록';
 }
-$('#edit-duty').onclick=()=>{$('#duty-teacher-input').value=dutyContact.teacher;$('#duty-extension-input').value=dutyContact.extension;$('#duty-dialog').showModal();};
-formHandler('#duty-form',async()=>{await api('/duty',{method:'PUT',body:{teacher:$('#duty-teacher-input').value.trim(),extension:$('#duty-extension-input').value.trim()}});$('#duty-dialog').close();await loadDuty();toast('당직 정보를 저장했어요.');});
+function fillDutyContact(){
+  const selected=teachers.find(t=>String(t.id)===$('#duty-teacher-input').value);
+  $('#duty-extension-input').value=selected?.extension||'';
+  $('#duty-phone-input').value=selected?.phone||'';
+}
+$('#duty-teacher-input').onchange=fillDutyContact;
+$('#edit-duty').onclick=async()=>{
+  try{
+    await Promise.all([loadTeachers(),loadDuty()]);
+    $('#duty-teacher-input').innerHTML='<option value="">미등록</option>'+teachers.map(t=>`<option value="${t.id}">${esc(t.name)}${t.location?' · '+esc(t.location):''}</option>`).join('');
+    $('#duty-teacher-input').value=dutyContact.teacher_id?String(dutyContact.teacher_id):'';
+    fillDutyContact();$('#duty-dialog').showModal();
+  }catch(error){showError(error);}
+};
+formHandler('#duty-form',async()=>{await api('/duty',{method:'PUT',body:{teacher_id:$('#duty-teacher-input').value?Number($('#duty-teacher-input').value):null}});$('#duty-dialog').close();await loadDuty();toast('당직 정보를 저장했어요.');});
 async function loadIssues(){issues=await api('/issues');renderIssues();}
 function renderIssues(){
   const open=issues.filter(i=>!i.done);
@@ -127,6 +160,7 @@ document.addEventListener('click',async event=>{
     }
     const close=event.target.closest('[data-close]');if(close)$('#'+close.dataset.close).close();
     const edit=event.target.closest('[data-edit]');if(edit)openPerson(+edit.dataset.edit);
+    const teacher=event.target.closest('[data-edit-teacher]');if(teacher)openTeacher(Number(teacher.dataset.editTeacher));
     const shift=event.target.closest('[data-shift]');if(shift)openShift(+shift.dataset.shift);
     const toggle=event.target.closest('[data-toggle-issue]');if(toggle){const issue=[...issues,...shiftIssues].find(i=>i.id===+toggle.dataset.toggleIssue);await api('/issues/'+issue.id,{method:'PATCH',body:{done:!issue.done}});await loadIssues();if(activeView==='schedule')await loadShiftIssues();toast('이슈 상태를 저장했어요.');}
     const account=event.target.closest('[data-user]');if(account){const target=users.find(u=>u.id===+account.dataset.user);if(!confirm(`${target.username} 계정을 ${target.active?'비활성화':'활성화'}할까요?`))return;await api('/users/'+target.id,{method:'PATCH',body:{active:!target.active}});await loadUsers();toast('계정 상태를 변경했어요.');}

@@ -137,7 +137,7 @@ class ApplicationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
         fresh = create_app({'DATABASE': database})
         with fresh.app_context():
-            self.assertEqual(fresh.db().execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(fresh.db().execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(fresh.db().execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(fresh.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(fresh.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
@@ -267,11 +267,11 @@ class ApplicationTests(unittest.TestCase):
     def test_tagging_migration_preserves_existing_database(self):
         with sqlite3.connect(self.database) as connection:
             connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
-                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE monthly_tags; DROP TABLE duty_contact; PRAGMA user_version=1;')
+                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE monthly_tags; DROP TABLE duty_contact; DROP TABLE teachers; PRAGMA user_version=1;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM staff').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT username FROM users').fetchone()[0], 'testadmin')
@@ -460,11 +460,11 @@ class ApplicationTests(unittest.TestCase):
         self.write('/tagging/1/2026/9', {'completed': True}, 'put')
         with sqlite3.connect(self.database) as connection:
             connection.executescript('DROP TABLE archive_tasks; DROP TABLE archive_assignments; DROP TABLE archive_draws; '
-                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE duty_contact; PRAGMA user_version=2;')
+                                     'ALTER TABLE users DROP COLUMN staff_id; DROP TABLE duty_contact; DROP TABLE teachers; PRAGMA user_version=2;')
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(connection.execute('SELECT count(*) FROM users').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT completed FROM monthly_tags').fetchone()[0], 1)
@@ -485,7 +485,7 @@ class ApplicationTests(unittest.TestCase):
                 DROP TABLE shifts;
                 ALTER TABLE legacy_shifts RENAME TO shifts;
                 CREATE INDEX shifts_day ON shifts(day);
-                DROP TABLE duty_contact; PRAGMA user_version=3; COMMIT;""")
+                DROP TABLE duty_contact; DROP TABLE teachers; PRAGMA user_version=3; COMMIT;""")
         self.app = create_app({'TESTING': True, 'DATABASE': self.database,
                               'SECRET_KEY': 'test-secret-' * 4, 'SESSION_COOKIE_SECURE': False})
         self.client = self.app.test_client()
@@ -502,7 +502,7 @@ class ApplicationTests(unittest.TestCase):
         shift = self.client.get(BASE + '/api/schedule').json['shifts'][-1]
         self.assertEqual(self.write('/shifts/' + str(shift['id']), {**body, 'start': 1290}, 'put').status_code, 200)
         with self.app.app_context():
-            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(self.app.db().execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(self.app.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(self.app.db().execute('PRAGMA foreign_key_check').fetchall(), [])
 
@@ -542,60 +542,70 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.write('/issues', {'day': '2026-99-99'}).status_code, 400)
 
     def test_duty_contact_validation_permissions_and_persistence(self):
+        empty = {'teacher_id': 0, 'teacher': '', 'extension': '', 'phone': ''}
         self.assertEqual(self.client.get(BASE + '/api/duty').status_code, 401)
         self.login()
-        self.assertEqual(self.client.get(BASE + '/api/duty').json, {'teacher': '', 'extension': ''})
-        data = {'teacher': ' 김담당 ', 'extension': ' 1234 '}
+        self.assertEqual(self.client.get(BASE + '/api/duty').json, empty)
+        teacher = {'name': ' 김담당 ', 'extension': ' 1234 ', 'phone': '010-1234-5678',
+                   'position': '사서', 'location': '자료실'}
+        self.assertEqual(self.write('/teachers', teacher).status_code, 201)
+        data = {'teacher_id': 1}
+        contact = {'teacher_id': 1, 'teacher': '김담당', 'extension': '1234', 'phone': '010-1234-5678'}
         self.assertEqual(self.client.put(BASE + '/api/duty', json=data).status_code, 403)
-        self.assertEqual(self.write('/duty', data, 'put').json, {'teacher': '김담당', 'extension': '1234'})
-        for invalid in [{}, {'teacher': None, 'extension': ''}, {'teacher': '가' * 41, 'extension': ''},
-                        {'teacher': '', 'extension': 'x123'}, {'teacher': '', 'extension': '1' * 21}]:
+        self.assertEqual(self.write('/duty', data, 'put').json, contact)
+        for invalid in [{}, {'teacher_id': True}, {'teacher_id': '1'}, {'teacher_id': 0}]:
             self.assertEqual(self.write('/duty', invalid, 'put').status_code, 400)
+        self.assertEqual(self.write('/duty', {'teacher_id': 999}, 'put').status_code, 404)
         self.write('/users', {'username': 'worker', 'password': 'worker-password-123', 'role': 'worker'})
         worker = self.app.test_client()
         self.login(worker, 'worker', 'worker-password-123')
-        self.assertEqual(worker.get(BASE + '/api/duty').json['teacher'], '김담당')
+        self.assertEqual(worker.get(BASE + '/api/duty').json, contact)
         self.assertEqual(self.write('/duty', data, 'put', worker).status_code, 403)
-        restarted = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
-        with restarted.app_context():
-            self.assertEqual(restarted.db().execute('SELECT teacher,extension FROM duty_contact').fetchone()[:], ('김담당', '1234'))
-        self.assertEqual(self.write('/duty', {'teacher': '', 'extension': ''}, 'put').status_code, 200)
+        self.assertEqual(self.write('/teachers', teacher, client=worker).status_code, 403)
+        restarted = create_app({'TESTING': True, 'DATABASE': self.database})
+        client = restarted.test_client()
+        self.login(client)
+        self.assertEqual(client.get(BASE + '/api/duty').json, contact)
+        self.assertEqual(self.write('/duty', {'teacher_id': None}, 'put').json, empty)
         with sqlite3.connect(self.database) as connection:
-            connection.executescript('DROP TABLE duty_contact; PRAGMA user_version=4;')
-        upgraded = create_app({'TESTING': True, 'DATABASE': self.database, 'SECRET_KEY': 'test-secret-' * 4})
+            connection.executescript('DROP TABLE duty_contact; DROP TABLE teachers; PRAGMA user_version=4;')
+        upgraded = create_app({'TESTING': True, 'DATABASE': self.database})
         with upgraded.app_context():
-            self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(upgraded.db().execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(upgraded.db().execute('SELECT count(*) FROM shifts').fetchone()[0], 2)
             self.assertEqual(upgraded.db().execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 
-
     def test_duty_contact_expires_and_a_new_save_uses_the_server_date(self):
         self.login()
-        contact = {'teacher': '오늘 담당', 'extension': '1234'}
-        self.assertEqual(self.write('/duty', {**contact, 'day': '2099-01-01'}, 'put').json, contact)
+        self.write('/teachers', {'name': '오늘 담당', 'extension': '1234', 'phone': '010-1234-5678'})
+        selection = {'teacher_id': 1}
+        contact = {'teacher_id': 1, 'teacher': '오늘 담당', 'extension': '1234', 'phone': '010-1234-5678'}
+        self.assertEqual(self.write('/duty', {**selection, 'day': '2099-01-01'}, 'put').json, contact)
         today = datetime.now(KOREA).date()
         with sqlite3.connect(self.database) as connection:
             self.assertEqual(connection.execute('SELECT day FROM duty_contact').fetchone()[0], today.isoformat())
         for stored_day in [today - timedelta(days=1), today + timedelta(days=1)]:
             with sqlite3.connect(self.database) as connection:
                 connection.execute('UPDATE duty_contact SET day=?', (stored_day.isoformat(),))
-            self.assertEqual(self.client.get(BASE + '/api/duty').json, {'teacher': '', 'extension': ''})
-        self.assertEqual(self.write('/duty', contact, 'put').json, contact)
+            self.assertEqual(self.client.get(BASE + '/api/duty').json,
+                             {'teacher_id': 0, 'teacher': '', 'extension': '', 'phone': ''})
+        self.assertEqual(self.write('/duty', selection, 'put').json, contact)
         self.assertEqual(self.client.get(BASE + '/api/duty').json, contact)
 
     def test_duty_version_five_migration_preserves_contact_for_today(self):
         self.login()
-        contact = {'teacher': '기존 담당', 'extension': '1234'}
-        self.write('/duty', contact, 'put')
         with sqlite3.connect(self.database) as connection:
-            connection.executescript('ALTER TABLE duty_contact DROP COLUMN day; PRAGMA user_version=5;')
+            connection.executescript("""DROP TABLE duty_contact; DROP TABLE teachers;
+                CREATE TABLE duty_contact(id INTEGER PRIMARY KEY CHECK(id=1), teacher TEXT NOT NULL, extension TEXT NOT NULL);
+                INSERT INTO duty_contact VALUES(1,'기존 담당','1234'); PRAGMA user_version=5;""")
         upgraded = create_app({'TESTING': True, 'DATABASE': self.database})
         client = upgraded.test_client()
         self.login(client)
-        self.assertEqual(client.get(BASE + '/api/duty').json, contact)
+        self.assertEqual(client.get(BASE + '/api/duty').json,
+                         {'teacher_id': 0, 'teacher': '기존 담당', 'extension': '1234', 'phone': ''})
         with upgraded.app_context():
             connection = upgraded.db()
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(connection.execute('SELECT day FROM duty_contact').fetchone()[0],
                              datetime.now(KOREA).date().isoformat())
             self.assertEqual(connection.execute('SELECT count(*) FROM shifts').fetchone()[0], 2)

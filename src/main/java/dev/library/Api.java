@@ -166,28 +166,74 @@ class Api {
   Object duty() {
     return db.read(
         c -> {
-          var row = one(c, "SELECT teacher,extension FROM duty_contact WHERE id=1 AND day=?", today());
-          return row == null ? Map.of("teacher", "", "extension", "") : row;
+          var row = one(c,
+              "SELECT COALESCE(t.id,0) AS teacher_id,COALESCE(t.name,d.teacher) AS teacher,"
+                  + " COALESCE(t.extension,d.extension) AS extension,COALESCE(t.phone,d.phone) AS phone"
+                  + " FROM duty_contact d LEFT JOIN teachers t ON t.id=d.teacher_id WHERE d.id=1 AND d.day=?",
+              today());
+          return row == null ? Map.of("teacher_id", 0, "teacher", "", "extension", "", "phone", "") : row;
         });
   }
 
   @PutMapping("/api/duty")
   Object saveDuty(@RequestBody Map<String, Object> d, HttpServletRequest r) {
     admin(r);
-    String teacher = text(d.get("teacher"), "담당쌤", 40, false),
-        extension = text(d.get("extension"), "내선번호", 20, false);
-    if (!extension.isEmpty() && !extension.matches("[0-9+() -]{1,20}")) fail("내선번호 형식을 확인해주세요.");
+    if (!d.containsKey("teacher_id")) fail("당직 선생님을 선택해주세요.");
+    Object id = d.get("teacher_id");
+    if (id != null && (!integer(id) || number(id) < 1)) fail("당직 선생님을 확인해주세요.");
     return db.write(
         c -> {
+          var contact = id == null ? null : one(c,
+              "SELECT id AS teacher_id,name AS teacher,extension,phone FROM teachers WHERE id=?", id);
+          if (id != null && contact == null) throw new Failure(404, "선생님을 찾을 수 없습니다.");
           update(
               c,
-              "INSERT INTO duty_contact(id,teacher,extension,day) VALUES(1,?,?,?) ON CONFLICT(id) DO"
-                  + " UPDATE SET teacher=excluded.teacher,extension=excluded.extension,day=excluded.day",
-              teacher,
-              extension,
-              today());
-          return Map.of("teacher", teacher, "extension", extension);
+              "INSERT INTO duty_contact(id,teacher,extension,phone,day,teacher_id) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO"
+                  + " UPDATE SET teacher=excluded.teacher,extension=excluded.extension,phone=excluded.phone,"
+                  + " day=excluded.day,teacher_id=excluded.teacher_id",
+              contact == null ? "" : contact.get("teacher"),
+              contact == null ? "" : contact.get("extension"),
+              contact == null ? "" : contact.get("phone"), today(), id);
+          return contact == null ? Map.of("teacher_id", 0, "teacher", "", "extension", "", "phone", "") : contact;
         });
+  }
+
+  static String[] teacher(Map<String, Object> d) {
+    var p = person(d);
+    String extension = text(d.getOrDefault("extension", ""), "내선번호", 20, false);
+    if (!extension.isEmpty() && !extension.matches("[0-9+() -]{1,20}")) fail("내선번호 형식을 확인해주세요.");
+    return new String[] {p[0], extension, p[1],
+        text(d.getOrDefault("position", ""), "직급", 40, false),
+        text(d.getOrDefault("location", ""), "근무 장소", 80, false)};
+  }
+
+  @GetMapping("/api/teachers")
+  Object teachers() {
+    return db.read(c -> rows(c, "SELECT * FROM teachers ORDER BY id"));
+  }
+
+  @PostMapping("/api/teachers")
+  ResponseEntity<?> addTeacher(@RequestBody Map<String, Object> d, HttpServletRequest r) {
+    admin(r);
+    var fields = teacher(d);
+    db.write(c -> {
+      update(c, "INSERT INTO teachers(name,extension,phone,position,location) VALUES(?,?,?,?,?)",
+          (Object[]) fields);
+      return null;
+    });
+    return ResponseEntity.status(201).body(ok());
+  }
+
+  @PutMapping("/api/teachers/{id}")
+  Object saveTeacher(@PathVariable int id, @RequestBody Map<String, Object> d, HttpServletRequest r) {
+    admin(r);
+    var args = new ArrayList<Object>(Arrays.asList(teacher(d)));
+    args.add(id);
+    return db.write(c -> {
+      if (update(c, "UPDATE teachers SET name=?,extension=?,phone=?,position=?,location=? WHERE id=?",
+          args.toArray()) == 0) throw new Failure(404, "선생님을 찾을 수 없습니다.");
+      return ok();
+    });
   }
 
   @GetMapping("/api/schedule")

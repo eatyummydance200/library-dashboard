@@ -130,8 +130,17 @@ DB 버전 4는 근무 종료 시각 제약을 22시까지 넓힌다. 기존 근�
 
 ## Spring Boot 이관
 
-서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/library-dashboard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 시작 시 버전 6으로 업그레이드하며 기존 업무 행·비밀번호 해시를 보존한다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
+서버는 Spring MVC·Thymeleaf·SQLite JDBC로 실행한다. 기존 HTML/CSS/JavaScript와 API 응답 구조, `/library-dashboard` 경로, UID 10001, 데이터 볼륨을 유지한다. DB는 시작 시 버전 7으로 업그레이드하며 기존 업무 행·비밀번호 해시를 보존한다. 기존 Werkzeug scrypt/PBKDF2-SHA256 해시를 검증하고 새 비밀번호도 호환 scrypt 형식으로 저장한다. HTTP 세션을 사용하므로 이관과 서버 재시작 후에는 다시 로그인해야 한다. 비밀번호 변경·계정 상태 변경 시 모든 요청에서 계정 버전을 확인해 이전 세션을 무효화한다. CSRF·HttpOnly·Secure·SameSite 쿠키와 64KB JSON 요청 제한을 적용한다.
 
 운영 JVM은 힙 최대 256MB, 메타스페이스 최대 128MB로 제한한다. 전체 프로세스 메모리는 힙보다 크므로 Docker 메모리 사용량도 확인한다. CI는 `mvn -B -DskipTests package`로 빌드만 확인하고 기능 테스트는 실행하지 않는다. `python3 scripts/run-local.py`는 비공개 개발 환경과 `data/local.sqlite3`로 8091 포트에 Java 서버를 실행한다.
 
-백업 타이머는 `ops/library-dashboard-backup.service`의 Java 명령을 사용한다. SQLite `VACUUM INTO`로 WAL에 커밋된 데이터를 포함하는 일관된 스냅샷을 만들고 7일간 보관한다. 이관 전 이미지는 `ghcr.io/eatyummydance200/library-dashboard@sha256:54ab30741394e39d2ebb0e019ffcea5fde1a0e6bbdb3256f7cafcb6a55a0395a`이다. 현재 DB v6에서 이 이미지로 롤백하려면 호환되는 배포 전 백업도 함께 복원해야 한다. 롤백 시 백업 서비스 명령도 해당 런타임에 맞춘다.
+백업 타이머는 `ops/library-dashboard-backup.service`의 Java 명령을 사용한다. SQLite `VACUUM INTO`로 WAL에 커밋된 데이터를 포함하는 일관된 스냅샷을 만들고 7일간 보관한다. 이관 전 이미지는 `ghcr.io/eatyummydance200/library-dashboard@sha256:54ab30741394e39d2ebb0e019ffcea5fde1a0e6bbdb3256f7cafcb6a55a0395a`이다. 현재 DB v7에서 이 이미지로 롤백하려면 호환되는 배포 전 백업도 함께 복원해야 한다. 롤백 시 백업 서비스 명령도 해당 런타임에 맞춘다.
+
+
+## 선생님 연락처와 당직 선택
+
+인적관리는 `근로`와 `선생님`을 별도 목록으로 표시한다. 선생님은 이름·직급·내선번호·휴대폰 번호·근무 장소를 관리하며 모든 로그인 사용자가 조회하고 관리자만 추가·수정한다. 선생님 목록은 근로학생 시간표·태깅·과월호 배정 인원에 포함하지 않는다.
+
+당직 수정에서 등록된 선생님을 선택하면 내선번호·휴대폰 번호를 자동으로 가져온다. `미등록`을 선택하면 당직 정보를 비운다. 선생님 연락처를 수정하면 현재 당직에도 최신 연락처를 표시한다. 당직의 한국 날짜 기준 일일 초기화는 유지한다.
+
+DB v7은 선생님 테이블과 당직의 선생님 연결·휴대폰 필드를 추가한다. 기존 업무 기록과 당일 당직은 보존하며, 구버전 이미지로 롤백하려면 호환되는 배포 전 백업이 필요하다. 선생님 연락처는 관리자 API로 실제 DB에 등록하며 이후 인적관리에서 수정한다. 실제 연락처는 공개 소스에 커밋하지 않는다.

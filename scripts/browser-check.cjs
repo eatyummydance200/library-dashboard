@@ -79,12 +79,13 @@ async function main() {
   assert.equal(await evaluate('document.querySelectorAll("#dashboard .duty-card").length'),1);
   if(local){
     const original=await evaluate('api("/duty")');
-    await evaluate('document.querySelector("#edit-duty").click();document.querySelector("#duty-teacher-input").value="<img src=x> 담당";document.querySelector("#duty-extension-input").value="0123";document.querySelector("#duty-form").requestSubmit()');
+    await evaluate('api("/teachers",{method:"POST",body:{name:"<img src=x> 담당",extension:"0123",phone:"010-1234-5678"}}).then(()=>document.querySelector("#edit-duty").onclick())');
+    await evaluate('document.querySelector("#duty-teacher-input").value=String(teachers.find(t=>t.name==="<img src=x> 담당").id);document.querySelector("#duty-teacher-input").dispatchEvent(new Event("change"));document.querySelector("#duty-form").requestSubmit()');
     await waitFor('!document.querySelector("#duty-dialog").open && document.querySelector("#duty-teacher").textContent==="<img src=x> 담당"');
     assert.equal(await evaluate('document.querySelector("#duty-teacher img")'),null);
     await evaluate('loadDuty()');
     assert.equal(await evaluate('document.querySelector("#duty-extension").textContent'),'0123');
-    await evaluate(`api('/duty',{method:'PUT',body:${JSON.stringify(original)}}).then(loadDuty)`);
+    await evaluate(`api('/duty',{method:'PUT',body:${JSON.stringify({teacher_id:original.teacher_id||null})}}).then(loadDuty)`);
   }
   await evaluate('setView("schedule")');
 
