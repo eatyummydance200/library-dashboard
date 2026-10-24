@@ -10,3 +10,7 @@ preview*.png
 static/fonts/*.woff2
 
 target
+
+frontend/node_modules
+frontend/dist
+.vercel

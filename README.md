@@ -1,6 +1,6 @@
 # 인천대학교 연속간행물실 근무 대시보드
 
-Java 21 + Spring Boot 3.5.16 + SQLite로 실행하는 근무 관리 서비스. 화면과 API를 한 컨테이너에서 제공하며 데이터는 Docker 볼륨에 보관한다.
+React 19 + TypeScript + Vite 프런트와 Java 21 + Spring Boot 3.5.16 + SQLite API로 실행하는 근무 관리 서비스. 새 프런트는 Vercel에서 제공하고 데이터는 기존 Java 서버의 Docker 볼륨에 보관한다. 기존 Java 화면은 전환 시 복구용으로 유지한다.
 
 - 30분 눈금의 스크롤 없는 주간 시간표, 현재 구간 표시, 시간표 탭의 주당 근무 시간
 - 이전·현재·다음 근무자의 데스크·대기 구분, 다른 주 시간표 복사
@@ -42,7 +42,7 @@ https://eatyummydance200.tail72d30b.ts.net/library-dashboard
 
 ## Server Desk 배포
 
-`main` push → GitHub Actions 빌드 확인(기능 테스트 생략) → `ghcr.io/eatyummydance200/library-dashboard:main` 및 커밋 SHA 태그 게시. 배포는 Server Desk에서 실행한다. 비공개 GHCR 패키지는 기존 Server Desk에 읽기 자격 증명을 설정해야 하며, 공개 패키지는 익명 pull 가능 여부를 확인한다.
+`main` push → GitHub Actions React·TypeScript 및 Java 빌드 확인(기능 테스트 생략) → `ghcr.io/eatyummydance200/library-dashboard:main` 및 커밋 SHA 태그 게시. 배포는 Server Desk에서 실행한다. 비공개 GHCR 패키지는 기존 Server Desk에 읽기 자격 증명을 설정해야 하며, 공개 패키지는 익명 pull 가능 여부를 확인한다.
 
 | 항목 | 값 |
 | --- | --- |
@@ -144,3 +144,24 @@ DB 버전 4는 근무 종료 시각 제약을 22시까지 넓힌다. 기존 근�
 당직 수정에서 등록된 선생님을 선택하면 내선번호·휴대폰 번호를 자동으로 가져온다. `미등록`을 선택하면 당직 정보를 비운다. 선생님 연락처를 수정하면 현재 당직에도 최신 연락처를 표시한다. 당직의 한국 날짜 기준 일일 초기화는 유지한다.
 
 DB v7은 선생님 테이블과 당직의 선생님 연결·휴대폰 필드를 추가한다. 기존 업무 기록과 당일 당직은 보존하며, 구버전 이미지로 롤백하려면 호환되는 배포 전 백업이 필요하다. 선생님 연락처는 관리자 API로 실제 DB에 등록하며 이후 인적관리에서 수정한다. 실제 연락처는 공개 소스에 커밋하지 않는다.
+
+
+## React 프런트와 Vercel
+
+프런트 소스는 `frontend/src/`에 있다. 기존 6개 업무 화면, 로그인·계정·비밀번호·백업 기능을 React로 옮겼으며 기존 CSS와 사용자 제공 로고를 공유한다. 태깅·과월호 저장 시 변경한 상태만 갱신해 표의 DOM과 포커스를 유지한다. 화면 이동 후 조회는 진행 중인 저장이 끝난 뒤 실행하며 이전 조회 응답이 최신 상태를 덮어쓰지 않게 취소한다.
+
+Node.js 22를 사용한다. 로컬 Java 서버를 8090 포트, `APP_BASE_PATH=/library-dashboard`, `COOKIE_SECURE=false`로 실행한 다음:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+브라우저에서 Vite가 안내하는 주소의 `/library-dashboard/`를 연다. Vite 개발 프록시는 같은 경로의 `/api` 요청만 `127.0.0.1:8090`의 Java 서버에 전달한다. `npm run build`는 글꼴 무결성 확인, 엄격한 TypeScript 검사, Vite 프로덕션 번들 생성을 수행한다. 기능 테스트는 실행하지 않는다.
+
+Vercel 프로젝트 설정은 Root Directory=`frontend`, Node.js=`22.x`, Framework=`Vite`, **Include source files outside of the Root Directory 활성화**다. 바깥의 `static/glass.css`, `static/inu-logo.png`, 글꼴 및 라이선스를 공유하므로 이 설정이 필요하다. Build=`npm run build`, Output=`dist`이며 `frontend/vercel.json`에 경로·보안 헤더·API 프록시를 정의했다.
+
+Vercel `/library-dashboard/api/*` → 기존 운영 Java 서버의 동일 경로로 프록시한다. 브라우저는 Vercel 도메인의 HttpOnly·Secure·SameSite 세션 쿠키와 CSRF 헤더를 사용하므로 별도 CORS 허용이 필요 없다. API 응답은 캐시하지 않는다. `/api/auth/csrf`, `/api/auth/login`만 비로그인 접근을 추가 허용하고 기존 로그인 검증·시도 제한·세션 교체를 공유한다. 다른 API의 로그인·관리자·본인 담당 권한은 기존 Java 코드가 검사한다. Vercel과 기존 Java 도메인의 로그인 세션은 별개이며 서버 재시작 시 다시 로그인해야 한다.
+
+개인정보와 비밀번호·환경변수·SQLite 파일을 프런트나 Vercel 환경변수에 넣지 않는다. 이름·연락처는 로그인 후 기존 API에서 읽는다. Java 서버와 공개 API 주소가 계속 가동되어야 Vercel 화면에서 업무를 처리할 수 있다. 이번 변경은 DB 스키마·저장 데이터·Funnel 설정을 바꾸지 않는다.

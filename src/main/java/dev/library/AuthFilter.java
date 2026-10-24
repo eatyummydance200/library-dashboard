@@ -61,7 +61,11 @@ class AuthFilter extends OncePerRequestFilter {
       }
       request.setAttribute("user", user);
       boolean publicPath =
-          path.equals("/login") || path.equals("/healthz") || path.startsWith("/static/");
+          path.equals("/login")
+              || path.equals("/api/auth/csrf")
+              || path.equals("/api/auth/login")
+              || path.equals("/healthz")
+              || path.startsWith("/static/");
       if (!publicPath && user == null) {
         if (path.startsWith("/api/")) throw new Api.Failure(401, "로그인이 필요합니다.");
         response.setStatus(302);
