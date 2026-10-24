@@ -4,7 +4,11 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "redirects": [
-    { "source": "/", "destination": "/library-dashboard/", "permanent": false }
+    {
+      "source": "/",
+      "destination": "/library-dashboard",
+      "permanent": false
+    }
   ],
   "rewrites": [
     {
@@ -15,15 +19,27 @@
       "source": "/library-dashboard/assets/:path*",
       "destination": "/assets/:path*"
     },
-    { "source": "/library-dashboard/OFL.txt", "destination": "/OFL.txt" },
-    { "source": "/library-dashboard/:path*", "destination": "/index.html" }
+    {
+      "source": "/library-dashboard/OFL.txt",
+      "destination": "/OFL.txt"
+    },
+    {
+      "source": "/library-dashboard/:path*",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "same-origin" },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "same-origin"
+        },
         {
           "key": "Content-Security-Policy",
           "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
@@ -32,7 +48,13 @@
     },
     {
       "source": "/library-dashboard/api/:path*",
-      "headers": [{ "key": "Cache-Control", "value": "private, no-store" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "private, no-store"
+        }
+      ]
     }
-  ]
+  ],
+  "trailingSlash": false
 }
